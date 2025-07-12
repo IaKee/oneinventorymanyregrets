@@ -1,0 +1,40 @@
+{
+	"schemaVersion": 1,
+	"id": "oneinventorymanyregrets",
+	"version": "${version}",
+	"name": "One Inventory, Many Regrets",
+	"description": "This is a shower thought mod!",
+	"authors": [
+		"iakee"
+	],
+	"contact": {
+		"homepage": "https://iakee.online",
+		"sources": "https://github.com/iakee/oneinventorymanyregrets"
+	},
+	"license": "CC0-1.0",
+	"icon": "assets/oneinventorymanyregrets/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"net.iakee.oneinventorymanyregrets.OneInventoryManyRegrets"
+		],
+		"fabric-datagen": [
+			"net.iakee.oneinventorymanyregrets.OneInventoryManyRegretsDataGenerator"
+		],
+		"client": [
+			"net.iakee.oneinventorymanyregrets.OneInventoryManyRegretsClient"
+		]
+	},
+	"mixins": [
+		"oneinventorymanyregrets.mixins.json"
+	],
+	"depends": {
+		"fabricloader": ">=0.16.14",
+		"minecraft": "~1.21.7",
+		"java": ">=21",
+		"fabric-api": "*"
+	},
+	"suggests": {
+		"another-mod": "*"
+	}
+}
