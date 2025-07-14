@@ -16,13 +16,13 @@
 	"environment": "*",
 	"entrypoints": {
 		"main": [
-			"net.iakee.oneinventorymanyregrets.OneInventoryManyRegrets"
+          "net.iakee.oneinventorymanyregrets.OIMRMod"
 		],
 		"fabric-datagen": [
-			"net.iakee.oneinventorymanyregrets.OneInventoryManyRegretsDataGenerator"
+			"net.iakee.oneinventorymanyregrets.OIMRDataGenerator"
 		],
 		"client": [
-			"net.iakee.oneinventorymanyregrets.OneInventoryManyRegretsClient"
+			"net.iakee.oneinventorymanyregrets.OIMRClient"
 		]
 	},
 	"mixins": [
