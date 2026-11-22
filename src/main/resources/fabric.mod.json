@@ -3,7 +3,7 @@
 	"id": "oneinventorymanyregrets",
 	"version": "${version}",
 	"name": "One Inventory, Many Regrets",
-	"description": "This is a shower thought mod!",
+	"description": "Hive-mind teams for Minecraft: shared inventory, armor, effects, hunger, health, and death.",
 	"authors": [
 		"iakee"
 	],
@@ -16,10 +16,7 @@
 	"environment": "*",
 	"entrypoints": {
 		"main": [
-          "net.iakee.oneinventorymanyregrets.OIMRMod"
-		],
-		"fabric-datagen": [
-			"net.iakee.oneinventorymanyregrets.OIMRDataGenerator"
+			"net.iakee.oneinventorymanyregrets.OIMRMod"
 		],
 		"client": [
 			"net.iakee.oneinventorymanyregrets.OIMRClient"
@@ -29,12 +26,9 @@
 		"oneinventorymanyregrets.mixins.json"
 	],
 	"depends": {
-		"fabricloader": ">=0.16.14",
-		"minecraft": "~1.21.7",
-		"java": ">=21",
+		"fabricloader": ">=0.20.1",
+		"minecraft": "~26.3",
+		"java": ">=25",
 		"fabric-api": "*"
-	},
-	"suggests": {
-		"another-mod": "*"
 	}
 }

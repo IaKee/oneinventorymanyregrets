@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "oneinventorymanyregrets-test",
+  "version": "1.0.0",
+  "name": "One Inventory, Many Regrets Tests",
+  "environment": "*",
+  "entrypoints": {
+    "fabric-gametest": [
+      "net.iakee.oneinventorymanyregrets.HiveMindGameTests"
+    ]
+  },
+  "depends": {
+    "oneinventorymanyregrets": "*"
+  }
+}

@@ -1,9 +1,30 @@
 {
 	"required": true,
 	"package": "net.iakee.oneinventorymanyregrets.mixin",
-	"compatibilityLevel": "JAVA_21",
+	"compatibilityLevel": "JAVA_25",
 	"mixins": [
-		"ExampleMixin"
+		"CombatTrackerMixin",
+		"EnchantmentMenuMixin",
+		"EntityEquipmentMixin",
+		"EntityMixin",
+		"FoodDataMixin",
+		"FoxMixin",
+		"InventoryMixin",
+		"LivingEntityMixin",
+		"MobEffectInstanceMixin",
+		"MobMixin",
+		"PlayerAdvancementsMixin",
+		"PlayerMixin",
+		"ServerExplosionMixin",
+		"ServerGamePacketListenerImplMixin",
+		"ServerPlayerMixin",
+		"ServerRecipeBookMixin",
+		"ServerScoreboardMixin",
+		"SimpleContainerMixin",
+		"ThrownSplashPotionMixin"
+	],
+	"client": [
+		"client.PauseScreenMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1
