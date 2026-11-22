@@ -29,10 +29,13 @@ import net.minecraft.world.entity.EntityReference;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.OwnableEntity;
+import net.minecraft.world.entity.ai.gossip.GossipType;
 import net.minecraft.world.entity.animal.fox.Fox;
+import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownSplashPotion;
 import net.minecraft.world.food.FoodData;
+import net.minecraft.world.inventory.MerchantMenu;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.level.block.Blocks;
@@ -40,6 +43,8 @@ import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.scores.PlayerTeam;
 import org.jspecify.annotations.Nullable;
+
+import java.nio.charset.StandardCharsets;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -395,6 +400,11 @@ public final class HiveMindManager {
         }
 
         syncVitalsToPlayer(player, server, hiveId, hive, false);
+        ((HivePlayerProgressAccess) player).oimr$setEnchantmentSeed(hive.getEnchantmentSeed());
+        if (player.containerMenu instanceof HiveEnchantmentMenuAccess enchantMenu
+            && enchantMenu.oimr$getSeed() != hive.getEnchantmentSeed()) {
+            enchantMenu.oimr$refreshSeed(hive.getEnchantmentSeed());
+        }
         player.inventoryMenu.sendAllDataToRemote();
         ((HiveLivingEntityAccess) player).oimr$detectEquipmentUpdates();
     }
@@ -898,6 +908,9 @@ public final class HiveMindManager {
                     member.forceAddEffect(copy, effectSource);
                     copy.onEffectStarted(member);
                 }
+                if (MobEffects.HERO_OF_THE_VILLAGE.equals(entry.effect)) {
+                    refreshOpenMerchantPricesForHive(server, entry.hiveId);
+                }
             }
         } finally {
             syncingEffects = false;
@@ -945,6 +958,9 @@ public final class HiveMindManager {
         } finally {
             syncingEffects = false;
         }
+        if (MobEffects.HERO_OF_THE_VILLAGE.equals(effect.getEffect())) {
+            refreshOpenMerchantPricesForHive(server, hiveId);
+        }
     }
 
     public static void onEffectsRemoved(LivingEntity entity, Collection<MobEffectInstance> removedEffects) {
@@ -961,7 +977,11 @@ public final class HiveMindManager {
             return;
         }
 
+        boolean heroRemoved = false;
         for (MobEffectInstance removed : removedEffects) {
+            if (MobEffects.HERO_OF_THE_VILLAGE.equals(removed.getEffect())) {
+                heroRemoved = true;
+            }
             hive.removeEffect(removed.getEffect());
         }
         HiveMindData.get(server).setDirty();
@@ -978,6 +998,9 @@ public final class HiveMindManager {
             }
         } finally {
             syncingEffects = false;
+        }
+        if (heroRemoved) {
+            refreshOpenMerchantPricesForHive(server, hiveId);
         }
     }
 
@@ -1285,8 +1308,14 @@ public final class HiveMindManager {
         }
     }
 
-    public static void onEnchantmentSeedChanged(ServerPlayer source) {
-        if (!isAttached(source)) {
+    public static int getEnchantmentSeed(ServerPlayer player) {
+        HiveMind hive = getHiveForPlayer(player);
+        return hive != null ? hive.getEnchantmentSeed() : 0;
+    }
+
+    public static void onEnchantmentPerformed(ServerPlayer source) {
+        onExperienceChanged(source);
+        if (!isAttached(source) || source.isDeadOrDying()) {
             return;
         }
         MinecraftServer server = source.level().getServer();
@@ -1299,17 +1328,13 @@ public final class HiveMindManager {
             return;
         }
 
-        int newSeed = ((HivePlayerProgressAccess) source).oimr$getEnchantmentSeed();
-        hive.setEnchantmentSeed(newSeed);
+        int nextSeed = hive.advanceEnchantmentSeed();
         HiveMindData.get(server).setDirty();
 
-        for (ServerPlayer other : getOnlineMembers(server, hiveId)) {
-            if (other == source) {
-                continue;
-            }
-            ((HivePlayerProgressAccess) other).oimr$setEnchantmentSeed(hive.getEnchantmentSeed());
-            if (other.containerMenu instanceof HiveEnchantmentMenuAccess enchantMenu) {
-                enchantMenu.oimr$refreshSeed(hive.getEnchantmentSeed());
+        for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
+            ((HivePlayerProgressAccess) member).oimr$setEnchantmentSeed(nextSeed);
+            if (member.containerMenu instanceof HiveEnchantmentMenuAccess enchantMenu && !enchantMenu.oimr$isInClick()) {
+                enchantMenu.oimr$refreshSeed(nextSeed);
             }
         }
     }
@@ -1475,8 +1500,66 @@ public final class HiveMindManager {
         }
     }
 
-    public static void pushDyingDamageSource(ServerPlayer player, DamageSource source) {
+    public static UUID getHiveReputationUuid(String hiveId) {
+        return UUID.nameUUIDFromBytes(("oimr:hive_reputation:" + hiveId).getBytes(StandardCharsets.UTF_8));
+    }
+
+    public static UUID resolveReputationTargetUuid(@Nullable Entity entity, UUID fallback) {
+        if (entity instanceof ServerPlayer player && isAttached(player)) {
+            String hiveId = PLAYER_HIVES.get(player.getUUID());
+            if (hiveId != null) {
+                return getHiveReputationUuid(hiveId);
+            }
+        }
+        return fallback;
+    }
+
+    public static boolean areSameHive(@Nullable Entity first, @Nullable Entity second) {
+        if (!(first instanceof ServerPlayer playerA) || !(second instanceof ServerPlayer playerB)) {
+            return false;
+        }
+        if (!isAttached(playerA) || !isAttached(playerB)) {
+            return false;
+        }
+        String hiveA = PLAYER_HIVES.get(playerA.getUUID());
+        return hiveA != null && hiveA.equals(PLAYER_HIVES.get(playerB.getUUID()));
+    }
+
+    public static void applyOfflineZombieVillagerCure(MinecraftServer server, UUID starterUuid, Villager villager) {
+        String hiveId = resolvePlayerHiveIdByUuid(server, starterUuid);
+        if (hiveId == null) {
+            return;
+        }
+        UUID hiveRepUuid = getHiveReputationUuid(hiveId);
+        villager.getGossips().add(hiveRepUuid, GossipType.MAJOR_POSITIVE, 20);
+        villager.getGossips().add(hiveRepUuid, GossipType.MINOR_POSITIVE, 25);
+        if (villager.getTradingPlayer() instanceof ServerPlayer tradingPlayer
+            && isAttached(tradingPlayer)
+            && hiveId.equals(PLAYER_HIVES.get(tradingPlayer.getUUID()))) {
+            ((HiveVillagerAccess) villager).oimr$updateSpecialPrices(tradingPlayer);
+        }
+    }
+
+    private static void refreshOpenMerchantPricesForHive(MinecraftServer server, String hiveId) {
+        for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
+            if (member.containerMenu instanceof MerchantMenu
+                && member.containerMenu instanceof HiveMerchantMenuAccess merchantAccess
+                && merchantAccess.oimr$getTrader() instanceof Villager villager
+                && villager.getTradingPlayer() == member) {
+                ((HiveVillagerAccess) villager).oimr$updateSpecialPrices(member);
+            }
+        }
+    }
+
+    public static void onBeforePlayerDie(ServerPlayer player, DamageSource source) {
         DYING_DAMAGE_SOURCES.put(player.getUUID(), source);
+        if (!cascadingDeath
+            && isAttached(player)
+            && (player.hasContainerOpen()
+                || !player.containerMenu.getCarried().isEmpty()
+                || !player.inventoryMenu.getCraftSlots().isEmpty())) {
+            player.doCloseContainer();
+        }
     }
 
     public static void popDyingDamageSource(ServerPlayer player) {

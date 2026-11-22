@@ -49,8 +49,7 @@ public class ServerPlayerMixin {
 
     @Inject(method = "onEnchantmentPerformed", at = @At("TAIL"))
     private void oimr$onEnchantmentPerformed(ItemStack stack, int cost, CallbackInfo ci) {
-        HiveMindManager.onExperienceChanged((ServerPlayer) (Object) this);
-        HiveMindManager.onEnchantmentSeedChanged((ServerPlayer) (Object) this);
+        HiveMindManager.onEnchantmentPerformed((ServerPlayer) (Object) this);
     }
 
     @Inject(method = "setRespawnPosition", at = @At("TAIL"))
@@ -60,7 +59,7 @@ public class ServerPlayerMixin {
 
     @Inject(method = "die", at = @At("HEAD"))
     private void oimr$beforeDie(DamageSource source, CallbackInfo ci) {
-        HiveMindManager.pushDyingDamageSource((ServerPlayer) (Object) this, source);
+        HiveMindManager.onBeforePlayerDie((ServerPlayer) (Object) this, source);
     }
 
     @Inject(method = "die", at = @At("RETURN"))

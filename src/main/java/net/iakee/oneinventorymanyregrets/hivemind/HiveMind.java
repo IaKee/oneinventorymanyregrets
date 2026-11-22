@@ -466,6 +466,20 @@ public final class HiveMind {
         this.enchantmentSeed = enchantmentSeed != 0 ? enchantmentSeed : nonZeroRandomSeed();
     }
 
+    public int advanceEnchantmentSeed() {
+        this.enchantmentSeed = nextDeterministicSeed(this.enchantmentSeed);
+        return this.enchantmentSeed;
+    }
+
+    private static int nextDeterministicSeed(int current) {
+        // SplitMix32 step for deterministic non-zero enchantment offer progression across the hive.
+        int z = current + 0x9E3779B9;
+        z = (z ^ (z >>> 16)) * 0x85EBCA6B;
+        z = (z ^ (z >>> 13)) * 0xC2B2AE35;
+        z = z ^ (z >>> 16);
+        return z != 0 ? z : 1;
+    }
+
     public ServerPlayer.@Nullable RespawnConfig getRespawnConfig() {
         return this.respawnConfig;
     }

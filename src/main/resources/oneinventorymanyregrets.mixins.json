@@ -11,6 +11,7 @@
 		"FoxMixin",
 		"InventoryMixin",
 		"LivingEntityMixin",
+		"MerchantMenuMixin",
 		"MobEffectInstanceMixin",
 		"MobMixin",
 		"PlayerAdvancementsMixin",
@@ -21,7 +22,9 @@
 		"ServerRecipeBookMixin",
 		"ServerScoreboardMixin",
 		"SimpleContainerMixin",
-		"ThrownSplashPotionMixin"
+		"ThrownSplashPotionMixin",
+		"VillagerMixin",
+		"ZombieVillagerMixin"
 	],
 	"client": [
 		"client.PauseScreenMixin"
