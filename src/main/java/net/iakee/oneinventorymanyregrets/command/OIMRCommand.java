@@ -2,6 +2,8 @@ package net.iakee.oneinventorymanyregrets.command;
 
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.FloatArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -15,6 +17,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 /**
@@ -35,46 +38,18 @@ public final class OIMRCommand {
                         Commands.literal("settings")
                             .requires(OIMRCommand::canEditSettings)
                             .executes(OIMRCommand::executeSettingsStatus)
-                            .then(
-                                Commands.literal("sharedKnockback")
-                                    .executes(OIMRCommand::executeSettingsStatus)
-                                    .then(
-                                        Commands.argument("enabled", BoolArgumentType.bool())
-                                            .executes(OIMRCommand::executeSetSharedKnockback)
-                                    )
-                            )
-                            .then(
-                                Commands.literal("comunism")
-                                    .executes(OIMRCommand::executeSettingsStatus)
-                                    .then(
-                                        Commands.argument("enabled", BoolArgumentType.bool())
-                                            .executes(OIMRCommand::executeSetComunism)
-                                    )
-                            )
-                            .then(
-                                Commands.literal("friendlyPets")
-                                    .executes(OIMRCommand::executeSettingsStatus)
-                                    .then(
-                                        Commands.argument("enabled", BoolArgumentType.bool())
-                                            .executes(OIMRCommand::executeSetFriendlyPets)
-                                    )
-                            )
-                            .then(
-                                Commands.literal("excludeCreativeFromDeath")
-                                    .executes(OIMRCommand::executeSettingsStatus)
-                                    .then(
-                                        Commands.argument("enabled", BoolArgumentType.bool())
-                                            .executes(OIMRCommand::executeSetExcludeCreativeFromDeath)
-                                    )
-                            )
-                            .then(
-                                Commands.literal("wipeCreativeInventoryOnDeath")
-                                    .executes(OIMRCommand::executeSettingsStatus)
-                                    .then(
-                                        Commands.argument("enabled", BoolArgumentType.bool())
-                                            .executes(OIMRCommand::executeSetWipeCreativeInventoryOnDeath)
-                                    )
-                            )
+                            .then(boolSetting("sharedKnockback", OIMRConfig::setSharedKnockback))
+                            .then(boolSetting("comunism", OIMRConfig::setComunism))
+                            .then(boolSetting("friendlyPets", OIMRConfig::setFriendlyPets))
+                            .then(boolSetting("excludeCreativeFromDeath", OIMRConfig::setExcludeCreativeFromDeath))
+                            .then(boolSetting("wipeCreativeInventoryOnDeath", OIMRConfig::setWipeCreativeInventoryOnDeath))
+                            .then(boolSetting("syncHotbar", OIMRConfig::setSyncHotbar))
+                            .then(boolSetting("syncHelmet", OIMRConfig::setSyncHelmet))
+                            .then(boolSetting("syncChestplate", OIMRConfig::setSyncChestplate))
+                            .then(boolSetting("syncLeggings", OIMRConfig::setSyncLeggings))
+                            .then(boolSetting("syncBoots", OIMRConfig::setSyncBoots))
+                            .then(boolSetting("syncMainHand", OIMRConfig::setSyncMainHand))
+                            .then(boolSetting("syncOffHand", OIMRConfig::setSyncOffHand))
                             .then(
                                 Commands.literal("hungerWeight")
                                     .executes(OIMRCommand::executeSettingsStatus)
@@ -86,12 +61,50 @@ public final class OIMRCommand {
                                     )
                             )
                             .then(
+                                Commands.literal("xpWeight")
+                                    .executes(OIMRCommand::executeSettingsStatus)
+                                    .then(
+                                        Commands.argument(
+                                            "weight",
+                                            FloatArgumentType.floatArg(OIMRConfig.MIN_XP_WEIGHT, OIMRConfig.MAX_XP_WEIGHT)
+                                        ).executes(OIMRCommand::executeSetXpWeight)
+                                    )
+                            )
+                            .then(
+                                Commands.literal("affinity")
+                                    .executes(OIMRCommand::executeSettingsStatus)
+                                    .then(
+                                        Commands.argument(
+                                            "percent",
+                                            IntegerArgumentType.integer(OIMRConfig.MIN_AFFINITY, OIMRConfig.MAX_AFFINITY)
+                                        ).executes(OIMRCommand::executeSetAffinity)
+                                    )
+                            )
+                            .then(
                                 Commands.literal("reload")
                                     .executes(OIMRCommand::executeReloadSettings)
                             )
                     )
             )
         );
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> boolSetting(String key, Consumer<Boolean> setter) {
+        return Commands.literal(key)
+            .executes(OIMRCommand::executeSettingsStatus)
+            .then(
+                Commands.argument("enabled", BoolArgumentType.bool())
+                    .executes(context -> {
+                        boolean enabled = BoolArgumentType.getBool(context, "enabled");
+                        setter.accept(enabled);
+                        HiveMindManager.onConfigChanged(context.getSource().getServer());
+                        context.getSource().sendSuccess(
+                            () -> Component.literal("Updated OIMR setting: " + key + " = " + enabled),
+                            true
+                        );
+                        return 1;
+                    })
+            );
     }
 
     /**
@@ -112,13 +125,22 @@ public final class OIMRCommand {
 
     private static String formatSettingsSummary() {
         return String.format(
-            "sharedKnockback = %s | comunism = %s | friendlyPets = %s | excludeCreativeFromDeath = %s | wipeCreativeInventoryOnDeath = %s | hungerWeight = %.2f",
+            "affinity = %d%% | hungerWeight = %.2f | xpWeight = %.2f | syncHotbar = %s | slots[H=%s,C=%s,L=%s,B=%s,MH=%s,OH=%s] | sharedKnockback = %s | friendlyPets = %s | excludeCreativeFromDeath = %s | wipeCreativeInventoryOnDeath = %s | comunism = %s",
+            OIMRConfig.getAffinityPercent(),
+            OIMRConfig.getHungerWeight(),
+            OIMRConfig.getXpWeight(),
+            OIMRConfig.isSyncHotbarEnabled(),
+            OIMRConfig.isSyncHelmetEnabled(),
+            OIMRConfig.isSyncChestplateEnabled(),
+            OIMRConfig.isSyncLeggingsEnabled(),
+            OIMRConfig.isSyncBootsEnabled(),
+            OIMRConfig.isSyncMainHandEnabled(),
+            OIMRConfig.isSyncOffHandEnabled(),
             OIMRConfig.isSharedKnockbackEnabled(),
-            OIMRConfig.isComunismEnabled(),
             OIMRConfig.isFriendlyPetsEnabled(),
             OIMRConfig.isExcludeCreativeFromDeathEnabled(),
             OIMRConfig.isWipeCreativeInventoryOnDeathEnabled(),
-            OIMRConfig.getHungerWeight()
+            OIMRConfig.isComunismEnabled()
         );
     }
 
@@ -131,60 +153,11 @@ public final class OIMRCommand {
         return 1;
     }
 
-    private static int executeSetSharedKnockback(CommandContext<CommandSourceStack> context) {
-        boolean enabled = BoolArgumentType.getBool(context, "enabled");
-        OIMRConfig.setSharedKnockback(enabled);
-        context.getSource().sendSuccess(
-            () -> Component.literal("Updated OIMR setting: sharedKnockback = " + enabled),
-            true
-        );
-        return 1;
-    }
-
-    private static int executeSetComunism(CommandContext<CommandSourceStack> context) {
-        boolean enabled = BoolArgumentType.getBool(context, "enabled");
-        OIMRConfig.setComunism(enabled);
-        context.getSource().sendSuccess(
-            () -> Component.literal("Updated OIMR setting: comunism = " + enabled),
-            true
-        );
-        return 1;
-    }
-
-    private static int executeSetFriendlyPets(CommandContext<CommandSourceStack> context) {
-        boolean enabled = BoolArgumentType.getBool(context, "enabled");
-        OIMRConfig.setFriendlyPets(enabled);
-        context.getSource().sendSuccess(
-            () -> Component.literal("Updated OIMR setting: friendlyPets = " + enabled),
-            true
-        );
-        return 1;
-    }
-
-    private static int executeSetExcludeCreativeFromDeath(CommandContext<CommandSourceStack> context) {
-        boolean enabled = BoolArgumentType.getBool(context, "enabled");
-        OIMRConfig.setExcludeCreativeFromDeath(enabled);
-        context.getSource().sendSuccess(
-            () -> Component.literal("Updated OIMR setting: excludeCreativeFromDeath = " + enabled),
-            true
-        );
-        return 1;
-    }
-
-    private static int executeSetWipeCreativeInventoryOnDeath(CommandContext<CommandSourceStack> context) {
-        boolean enabled = BoolArgumentType.getBool(context, "enabled");
-        OIMRConfig.setWipeCreativeInventoryOnDeath(enabled);
-        context.getSource().sendSuccess(
-            () -> Component.literal("Updated OIMR setting: wipeCreativeInventoryOnDeath = " + enabled),
-            true
-        );
-        return 1;
-    }
-
     private static int executeSetHungerWeight(CommandContext<CommandSourceStack> context) {
         float weight = FloatArgumentType.getFloat(context, "weight");
         OIMRConfig.setHungerWeight(weight);
         float updated = OIMRConfig.getHungerWeight();
+        HiveMindManager.onConfigChanged(context.getSource().getServer());
         context.getSource().sendSuccess(
             () -> Component.literal(String.format("Updated OIMR setting: hungerWeight = %.2f", updated)),
             true
@@ -192,8 +165,35 @@ public final class OIMRCommand {
         return 1;
     }
 
+    private static int executeSetXpWeight(CommandContext<CommandSourceStack> context) {
+        float weight = FloatArgumentType.getFloat(context, "weight");
+        OIMRConfig.setXpWeight(weight);
+        float updated = OIMRConfig.getXpWeight();
+        HiveMindManager.onConfigChanged(context.getSource().getServer());
+        context.getSource().sendSuccess(
+            () -> Component.literal(String.format("Updated OIMR setting: xpWeight = %.2f", updated)),
+            true
+        );
+        return 1;
+    }
+
+    private static int executeSetAffinity(CommandContext<CommandSourceStack> context) {
+        int percent = IntegerArgumentType.getInteger(context, "percent");
+        OIMRConfig.setAffinityPercent(percent);
+        int updated = OIMRConfig.getAffinityPercent();
+        HiveMindManager.onConfigChanged(context.getSource().getServer());
+        context.getSource().sendSuccess(
+            () -> Component.literal("Updated OIMR setting: affinity = " + updated + "%"),
+            true
+        );
+        return 1;
+    }
+
     private static int executeReloadSettings(CommandContext<CommandSourceStack> context) {
         OIMRConfig.load();
+        MinecraftServer server = context.getSource().getServer();
+        HiveMindManager.onConfigChanged(server);
+        HiveMindManager.notifyIfInvalidAffinityReset(server);
         String summary = formatSettingsSummary();
         context.getSource().sendSuccess(
             () -> Component.literal("Reloaded OIMR settings | " + summary),
@@ -214,11 +214,14 @@ public final class OIMRCommand {
 
         context.getSource().sendSuccess(
             () -> Component.literal(String.format(
-                "Hive Mind: %s | Online: %d (%s) | Hunger rate: %.2fx / %d per player | Shared KB: %s | HP: %.1f | Food: %d | XP Lv: %d",
+                "Group: %s | Online: %d (%s) | Affinity: %d%% | Hunger: %.2fx / %d | XP: %.2fx / %d | Shared KB: %s | HP: %.1f | Food: %d | XP Lv: %d",
                 hiveId,
                 onlineMembers.size(),
                 memberNames.isEmpty() ? "none" : memberNames,
+                OIMRConfig.getAffinityPercent(),
                 OIMRConfig.getHungerWeight(),
+                hungerScale,
+                OIMRConfig.getXpWeight(),
                 hungerScale,
                 OIMRConfig.isSharedKnockbackEnabled() ? "ON" : "OFF",
                 player.getHealth(),
@@ -234,7 +237,7 @@ public final class OIMRCommand {
         MinecraftServer server = context.getSource().getServer();
         HiveMindData data = HiveMindData.get(server);
         if (data.getAll().isEmpty()) {
-            context.getSource().sendSuccess(() -> Component.literal("No Hive Minds registered yet."), false);
+            context.getSource().sendSuccess(() -> Component.literal("No groups registered yet."), false);
             return 1;
         }
 
@@ -251,7 +254,7 @@ public final class OIMRCommand {
             })
             .collect(Collectors.joining(" | "));
 
-        context.getSource().sendSuccess(() -> Component.literal("Hive Minds: " + summary), false);
+        context.getSource().sendSuccess(() -> Component.literal("Groups: " + summary), false);
         return 1;
     }
 }

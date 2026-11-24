@@ -1,17 +1,27 @@
 package net.iakee.oneinventorymanyregrets.mixin;
 
 import com.llamalad7.mixinextras.injector.v2.WrapWithCondition;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import io.netty.channel.ChannelFutureListener;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindManager;
+import net.iakee.oneinventorymanyregrets.hivemind.OIMRLang;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundPlayerCombatKillPacket;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.server.players.PlayerList;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.food.FoodData;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.scores.PlayerTeam;
+import org.jspecify.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(ServerPlayer.class)
@@ -25,6 +35,22 @@ public class ServerPlayerMixin {
     )
     private boolean oimr$tickFoodOncePerHiveMind(FoodData instance, ServerPlayer player) {
         return HiveMindManager.shouldTickFood(player);
+    }
+
+    @ModifyVariable(method = "giveExperiencePoints", at = @At("HEAD"), argsOnly = true)
+    private int oimr$scaleExperiencePointsGain(int points) {
+        if (points > 0) {
+            return HiveMindManager.scaleExperiencePoints((ServerPlayer) (Object) this, points);
+        }
+        return points;
+    }
+
+    @ModifyVariable(method = "giveExperienceLevels", at = @At("HEAD"), argsOnly = true)
+    private int oimr$scaleExperienceLevelsGain(int levels) {
+        if (levels > 0) {
+            return HiveMindManager.scaleExperienceLevels((ServerPlayer) (Object) this, levels);
+        }
+        return levels;
     }
 
     @Inject(method = "giveExperiencePoints", at = @At("TAIL"))
@@ -67,36 +93,109 @@ public class ServerPlayerMixin {
         HiveMindManager.popDyingDamageSource((ServerPlayer) (Object) this);
     }
 
-    @WrapWithCondition(
+    @WrapOperation(
+        method = "die",
+        at = @At(
+            value = "INVOKE",
+            target = "Lnet/minecraft/server/network/ServerGamePacketListenerImpl;send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;)V"
+        )
+    )
+    private void oimr$localizeCombatKillPacket(
+        ServerGamePacketListenerImpl instance,
+        Packet<?> packet,
+        @Nullable ChannelFutureListener listener,
+        Operation<Void> original
+    ) {
+        if (packet instanceof ClientboundPlayerCombatKillPacket killPacket && OIMRLang.containsOimrKey(killPacket.message())) {
+            Component localized = OIMRLang.localizeForPlayer(killPacket.message(), (ServerPlayer) (Object) this);
+            packet = new ClientboundPlayerCombatKillPacket(killPacket.playerId(), localized);
+        }
+        original.call(instance, packet, listener);
+    }
+
+    @WrapOperation(
         method = "die",
         at = @At(
             value = "INVOKE",
             target = "Lnet/minecraft/server/players/PlayerList;broadcastSystemMessage(Lnet/minecraft/network/chat/Component;Z)V"
         )
     )
-    private boolean oimr$shouldBroadcastDeathAll(PlayerList instance, Component message, boolean bypassHiddenChat) {
-        return !HiveMindManager.consumeSuppressDeathChat((ServerPlayer) (Object) this);
+    private void oimr$broadcastDeathAll(
+        PlayerList instance,
+        Component message,
+        boolean bypassHiddenChat,
+        Operation<Void> original
+    ) {
+        if (HiveMindManager.consumeSuppressDeathChat((ServerPlayer) (Object) this)) {
+            return;
+        }
+        if (OIMRLang.containsOimrKey(message)) {
+            instance.broadcastSystemMessage(message, recipient -> OIMRLang.localizeForPlayer(message, recipient), bypassHiddenChat);
+            return;
+        }
+        original.call(instance, message, bypassHiddenChat);
     }
 
-    @WrapWithCondition(
+    @WrapOperation(
         method = "die",
         at = @At(
             value = "INVOKE",
             target = "Lnet/minecraft/server/players/PlayerList;broadcastSystemToTeam(Lnet/minecraft/world/entity/player/Player;Lnet/minecraft/network/chat/Component;)V"
         )
     )
-    private boolean oimr$shouldBroadcastDeathTeam(PlayerList instance, Player player, Component message) {
-        return !HiveMindManager.consumeSuppressDeathChat((ServerPlayer) (Object) this);
+    private void oimr$broadcastDeathTeam(
+        PlayerList instance,
+        Player player,
+        Component message,
+        Operation<Void> original
+    ) {
+        if (HiveMindManager.consumeSuppressDeathChat((ServerPlayer) (Object) this)) {
+            return;
+        }
+        if (OIMRLang.containsOimrKey(message)) {
+            PlayerTeam team = player.getTeam();
+            if (team != null) {
+                for (String name : team.getPlayers()) {
+                    ServerPlayer recipient = instance.getPlayerByName(name);
+                    if (recipient != null && recipient != player) {
+                        recipient.sendSystemMessage(OIMRLang.localizeForPlayer(message, recipient));
+                    }
+                }
+            }
+            return;
+        }
+        original.call(instance, player, message);
     }
 
-    @WrapWithCondition(
+    @WrapOperation(
         method = "die",
         at = @At(
             value = "INVOKE",
             target = "Lnet/minecraft/server/players/PlayerList;broadcastSystemToAllExceptTeam(Lnet/minecraft/world/entity/player/Player;Lnet/minecraft/network/chat/Component;)V"
         )
     )
-    private boolean oimr$shouldBroadcastDeathExceptTeam(PlayerList instance, Player player, Component message) {
-        return !HiveMindManager.consumeSuppressDeathChat((ServerPlayer) (Object) this);
+    private void oimr$broadcastDeathExceptTeam(
+        PlayerList instance,
+        Player player,
+        Component message,
+        Operation<Void> original
+    ) {
+        if (HiveMindManager.consumeSuppressDeathChat((ServerPlayer) (Object) this)) {
+            return;
+        }
+        if (OIMRLang.containsOimrKey(message)) {
+            PlayerTeam team = player.getTeam();
+            if (team == null) {
+                instance.broadcastSystemMessage(message, recipient -> OIMRLang.localizeForPlayer(message, recipient), false);
+            } else {
+                for (ServerPlayer recipient : instance.getPlayers()) {
+                    if (recipient.getTeam() != team) {
+                        recipient.sendSystemMessage(OIMRLang.localizeForPlayer(message, recipient));
+                    }
+                }
+            }
+            return;
+        }
+        original.call(instance, player, message);
     }
 }

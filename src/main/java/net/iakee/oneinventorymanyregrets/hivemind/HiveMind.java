@@ -2,6 +2,7 @@ package net.iakee.oneinventorymanyregrets.hivemind;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
+import net.iakee.oneinventorymanyregrets.config.OIMRConfig;
 import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.advancements.AdvancementProgress;
 import net.minecraft.core.Holder;
@@ -24,6 +25,7 @@ import org.jspecify.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -84,21 +86,69 @@ public final class HiveMind {
         ).apply(instance, VitalsState::new));
     }
 
+    private record PlayerRemainderState(
+        double damage,
+        double heal,
+        double absorption,
+        double healthBoost,
+        double infestedChanceScale,
+        Map<Holder<MobEffect>, Double> effectDurations,
+        Map<Holder<MobEffect>, Double> effectTriggers
+    ) {
+        static final Codec<PlayerRemainderState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
+            Codec.DOUBLE.optionalFieldOf("damage", 0.0D).forGetter(PlayerRemainderState::damage),
+            Codec.DOUBLE.optionalFieldOf("heal", 0.0D).forGetter(PlayerRemainderState::heal),
+            Codec.DOUBLE.optionalFieldOf("absorption", 0.0D).forGetter(PlayerRemainderState::absorption),
+            Codec.DOUBLE.optionalFieldOf("health_boost", 0.0D).forGetter(PlayerRemainderState::healthBoost),
+            Codec.DOUBLE.optionalFieldOf("infested_chance_scale", 1.0D).forGetter(PlayerRemainderState::infestedChanceScale),
+            Codec.unboundedMap(MobEffect.CODEC, Codec.DOUBLE)
+                .optionalFieldOf("effect_durations", Map.of())
+                .forGetter(PlayerRemainderState::effectDurations),
+            Codec.unboundedMap(MobEffect.CODEC, Codec.DOUBLE)
+                .optionalFieldOf("effect_triggers", Map.of())
+                .forGetter(PlayerRemainderState::effectTriggers)
+        ).apply(instance, PlayerRemainderState::new));
+    }
+
+    private static final class MutablePlayerRemainders {
+        double damage;
+        double heal;
+        double absorption;
+        double healthBoost;
+        double infestedChanceScale = 1.0D;
+        final Map<Holder<MobEffect>, Double> effectDurations = new LinkedHashMap<>();
+        final Map<Holder<MobEffect>, Double> effectTriggers = new LinkedHashMap<>();
+
+        boolean isEmpty() {
+            return this.damage <= 0.0D
+                && this.heal <= 0.0D
+                && this.absorption <= 0.0D
+                && this.healthBoost <= 0.0D
+                && Math.abs(this.infestedChanceScale - 1.0D) <= 1.0E-9D
+                && this.effectDurations.isEmpty()
+                && this.effectTriggers.isEmpty();
+        }
+    }
+
     private record ProgressState(
         int xpLevel,
         int xpTotal,
         float xpProgress,
+        double xpRemainder,
+        double xpLevelRemainder,
         int enchantmentSeed,
         Optional<ServerPlayer.RespawnConfig> respawn,
         Map<Identifier, AdvancementProgress> advancements,
         List<ResourceKey<Recipe<?>>> knownRecipes,
         List<ResourceKey<Recipe<?>>> highlightRecipes
     ) {
-        static final ProgressState DEFAULT = new ProgressState(0, 0, 0.0F, 0, Optional.empty(), Map.of(), List.of(), List.of());
+        static final ProgressState DEFAULT = new ProgressState(0, 0, 0.0F, 0.0D, 0.0D, 0, Optional.empty(), Map.of(), List.of(), List.of());
         static final Codec<ProgressState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
             Codec.INT.optionalFieldOf("xp_level", 0).forGetter(ProgressState::xpLevel),
             Codec.INT.optionalFieldOf("xp_total", 0).forGetter(ProgressState::xpTotal),
             Codec.FLOAT.optionalFieldOf("xp_progress", 0.0F).forGetter(ProgressState::xpProgress),
+            Codec.DOUBLE.optionalFieldOf("xp_remainder", 0.0D).forGetter(ProgressState::xpRemainder),
+            Codec.DOUBLE.optionalFieldOf("xp_level_remainder", 0.0D).forGetter(ProgressState::xpLevelRemainder),
             Codec.INT.optionalFieldOf("enchantment_seed", 0).forGetter(ProgressState::enchantmentSeed),
             ServerPlayer.RespawnConfig.CODEC.optionalFieldOf("respawn").forGetter(ProgressState::respawn),
             Codec.unboundedMap(Identifier.CODEC, AdvancementProgress.CODEC)
@@ -114,7 +164,10 @@ public final class HiveMind {
         Codec.BOOL.optionalFieldOf("initialized", false).forGetter(HiveMind::isInitialized),
         InventoryState.CODEC.optionalFieldOf("inventory_state", InventoryState.EMPTY).forGetter(HiveMind::encodeInventoryState),
         VitalsState.CODEC.optionalFieldOf("vitals_state", VitalsState.DEFAULT).forGetter(HiveMind::encodeVitalsState),
-        ProgressState.CODEC.optionalFieldOf("progress_state", ProgressState.DEFAULT).forGetter(HiveMind::encodeProgressState)
+        ProgressState.CODEC.optionalFieldOf("progress_state", ProgressState.DEFAULT).forGetter(HiveMind::encodeProgressState),
+        Codec.unboundedMap(Codec.STRING, PlayerRemainderState.CODEC)
+            .optionalFieldOf("player_remainders", Map.of())
+            .forGetter(HiveMind::encodePlayerRemainders)
     ).apply(instance, HiveMind::fromCodec));
 
     private final String id;
@@ -137,12 +190,17 @@ public final class HiveMind {
     private final Map<Identifier, AdvancementProgress> advancements;
     private final Set<ResourceKey<Recipe<?>>> knownRecipes;
     private final Set<ResourceKey<Recipe<?>>> highlightRecipes;
+    private final Map<UUID, MutablePlayerRemainders> playerRemainders;
 
     private long lastFoodTickGameTime = -1L;
-    private long lastEffectTickGameTime = -1L;
     private long lastEnvironmentTickGameTime = -1L;
     private long lastFreezeIncrementGameTime = -1L;
-    private UUID primaryEffectTickerUuid = null;
+    private double xpRemainder = 0.0D;
+    private double xpLevelRemainder = 0.0D;
+    private final Map<Holder<MobEffect>, EffectTickClaim> primaryEffectTickers = new HashMap<>();
+
+    private record EffectTickClaim(long gameTime, @Nullable UUID tickerUuid) {
+    }
 
     public HiveMind(String id) {
         this.id = id;
@@ -165,6 +223,7 @@ public final class HiveMind {
         this.advancements = new LinkedHashMap<>();
         this.knownRecipes = new LinkedHashSet<>();
         this.highlightRecipes = new LinkedHashSet<>();
+        this.playerRemainders = new HashMap<>();
     }
 
     private static int nonZeroRandomSeed() {
@@ -172,12 +231,17 @@ public final class HiveMind {
         return seed != 0 ? seed : 1;
     }
 
+    private static double sanitizeRemainder(double value) {
+        return Double.isFinite(value) && value > 0.0D ? value : 0.0D;
+    }
+
     private static HiveMind fromCodec(
         String id,
         boolean initialized,
         InventoryState invState,
         VitalsState vitals,
-        ProgressState progress
+        ProgressState progress,
+        Map<String, PlayerRemainderState> remainders
     ) {
         HiveMind hive = new HiveMind(id);
         hive.initialized = initialized;
@@ -217,6 +281,8 @@ public final class HiveMind {
         hive.experienceLevel = Math.max(0, progress.xpLevel());
         hive.totalExperience = Math.max(0, progress.xpTotal());
         hive.experienceProgress = Mth.clamp(progress.xpProgress(), 0.0F, 1.0F);
+        hive.xpRemainder = sanitizeRemainder(progress.xpRemainder());
+        hive.xpLevelRemainder = sanitizeRemainder(progress.xpLevelRemainder());
         hive.enchantmentSeed = progress.enchantmentSeed() != 0 ? progress.enchantmentSeed() : nonZeroRandomSeed();
         hive.respawnConfig = progress.respawn().orElse(null);
 
@@ -227,6 +293,36 @@ public final class HiveMind {
         });
         hive.knownRecipes.addAll(progress.knownRecipes());
         hive.highlightRecipes.addAll(progress.highlightRecipes());
+
+        remainders.forEach((uuidStr, state) -> {
+            try {
+                UUID uuid = UUID.fromString(uuidStr);
+                MutablePlayerRemainders target = new MutablePlayerRemainders();
+                target.damage = sanitizeRemainder(state.damage());
+                target.heal = sanitizeRemainder(state.heal());
+                target.absorption = sanitizeRemainder(state.absorption());
+                target.healthBoost = sanitizeRemainder(state.healthBoost());
+                target.infestedChanceScale = Double.isFinite(state.infestedChanceScale())
+                    ? Mth.clamp(state.infestedChanceScale(), 0.0D, 1.0D)
+                    : 1.0D;
+                state.effectDurations().forEach((effect, rem) -> {
+                    double sanitized = sanitizeRemainder(rem);
+                    if (sanitized > 0.0D) {
+                        target.effectDurations.put(effect, sanitized);
+                    }
+                });
+                state.effectTriggers().forEach((effect, rem) -> {
+                    double sanitized = sanitizeRemainder(rem);
+                    if (sanitized > 0.0D) {
+                        target.effectTriggers.put(effect, sanitized);
+                    }
+                });
+                if (!target.isEmpty()) {
+                    hive.playerRemainders.put(uuid, target);
+                }
+            } catch (IllegalArgumentException ignored) {
+            }
+        });
 
         return hive;
     }
@@ -271,12 +367,32 @@ public final class HiveMind {
             this.experienceLevel,
             this.totalExperience,
             this.experienceProgress,
+            this.xpRemainder,
+            this.xpLevelRemainder,
             this.enchantmentSeed,
             Optional.ofNullable(this.respawnConfig),
             advMap,
             List.copyOf(this.knownRecipes),
             List.copyOf(this.highlightRecipes)
         );
+    }
+
+    private Map<String, PlayerRemainderState> encodePlayerRemainders() {
+        Map<String, PlayerRemainderState> encoded = new LinkedHashMap<>();
+        this.playerRemainders.forEach((uuid, rem) -> {
+            if (!rem.isEmpty()) {
+                encoded.put(uuid.toString(), new PlayerRemainderState(
+                    rem.damage,
+                    rem.heal,
+                    rem.absorption,
+                    rem.healthBoost,
+                    rem.infestedChanceScale,
+                    Map.copyOf(rem.effectDurations),
+                    Map.copyOf(rem.effectTriggers)
+                ));
+            }
+        });
+        return encoded;
     }
 
     private static List<ItemStackWithSlot> encodeSlotList(NonNullList<ItemStack> slotList) {
@@ -302,10 +418,15 @@ public final class HiveMind {
         this.initialized = true;
     }
 
-    public void initializeFrom(ServerPlayer player) {
+    public void initializeFrom(ServerPlayer player, PersonalInventoryState personal) {
         NonNullList<ItemStack> playerItems = ((HiveInventoryAccess) player.getInventory()).oimr$getItems();
         for (int i = 0; i < MAIN_INVENTORY_SIZE; i++) {
-            this.items.set(i, playerItems.get(i).copy());
+            ItemStack copy = playerItems.get(i).copy();
+            if (OIMRConfig.isHotbarSlotSynced(i)) {
+                this.items.set(i, copy);
+            } else if (i < PersonalInventoryState.HOTBAR_SIZE) {
+                personal.getHotbarItems().set(i, copy);
+            }
         }
 
         NonNullList<ItemStack> playerEnderChest = ((HiveInventoryAccess) player.getEnderChestInventory()).oimr$getItems();
@@ -318,7 +439,11 @@ public final class HiveMind {
             ((HiveEquipmentAccess) ((HiveLivingEntityAccess) player).oimr$getEquipment()).oimr$getEquipmentItems();
         playerEquip.forEach((slot, stack) -> {
             if (slot != EquipmentSlot.MAINHAND && !stack.isEmpty()) {
-                this.equipmentMap.put(slot, stack.copy());
+                if (OIMRConfig.isEquipmentSlotSynced(slot)) {
+                    this.equipmentMap.put(slot, stack.copy());
+                } else {
+                    personal.getEquipmentMap().put(slot, stack.copy());
+                }
             }
         });
 
@@ -376,12 +501,168 @@ public final class HiveMind {
         this.remainingFireTicks = 0;
         this.ticksFrozen = 0;
         this.effects.clear();
+        this.playerRemainders.clear();
     }
 
     public void resetExperience() {
         this.experienceLevel = 0;
         this.totalExperience = 0;
         this.experienceProgress = 0.0F;
+        this.xpRemainder = 0.0D;
+        this.xpLevelRemainder = 0.0D;
+    }
+
+    public double getXpRemainder() {
+        return this.xpRemainder;
+    }
+
+    public void setXpRemainder(double xpRemainder) {
+        this.xpRemainder = sanitizeRemainder(xpRemainder);
+    }
+
+    public double getXpLevelRemainder() {
+        return this.xpLevelRemainder;
+    }
+
+    public void setXpLevelRemainder(double xpLevelRemainder) {
+        this.xpLevelRemainder = sanitizeRemainder(xpLevelRemainder);
+    }
+
+    public double getDamageRemainder(UUID playerId) {
+        MutablePlayerRemainders rem = this.playerRemainders.get(playerId);
+        return rem != null ? rem.damage : 0.0D;
+    }
+
+    public void setDamageRemainder(UUID playerId, double value) {
+        updatePlayerRemainder(playerId, value, (rem, v) -> rem.damage = v);
+    }
+
+    public double getHealRemainder(UUID playerId) {
+        MutablePlayerRemainders rem = this.playerRemainders.get(playerId);
+        return rem != null ? rem.heal : 0.0D;
+    }
+
+    public void setHealRemainder(UUID playerId, double value) {
+        updatePlayerRemainder(playerId, value, (rem, v) -> rem.heal = v);
+    }
+
+    public double getAbsorptionRemainder(UUID playerId) {
+        MutablePlayerRemainders rem = this.playerRemainders.get(playerId);
+        return rem != null ? rem.absorption : 0.0D;
+    }
+
+    public void setAbsorptionRemainder(UUID playerId, double value) {
+        updatePlayerRemainder(playerId, value, (rem, v) -> rem.absorption = v);
+    }
+
+    public double getHealthBoostRemainder(UUID playerId) {
+        MutablePlayerRemainders rem = this.playerRemainders.get(playerId);
+        return rem != null ? rem.healthBoost : 0.0D;
+    }
+
+    public void setHealthBoostRemainder(UUID playerId, double value) {
+        updatePlayerRemainder(playerId, value, (rem, v) -> rem.healthBoost = v);
+    }
+
+    public double getInfestedChanceScale(UUID playerId) {
+        MutablePlayerRemainders rem = this.playerRemainders.get(playerId);
+        return rem != null ? rem.infestedChanceScale : 1.0D;
+    }
+
+    public void setInfestedChanceScale(UUID playerId, double scale) {
+        double sanitized = Double.isFinite(scale) ? Mth.clamp(scale, 0.0D, 1.0D) : 1.0D;
+        if (Math.abs(sanitized - 1.0D) <= 1.0E-9D) {
+            MutablePlayerRemainders rem = this.playerRemainders.get(playerId);
+            if (rem != null) {
+                rem.infestedChanceScale = 1.0D;
+                if (rem.isEmpty()) {
+                    this.playerRemainders.remove(playerId);
+                }
+            }
+            return;
+        }
+        this.playerRemainders.computeIfAbsent(playerId, ignored -> new MutablePlayerRemainders()).infestedChanceScale = sanitized;
+    }
+
+    public double getEffectDurationRemainder(UUID playerId, Holder<MobEffect> effect) {
+        MutablePlayerRemainders rem = this.playerRemainders.get(playerId);
+        return rem != null ? rem.effectDurations.getOrDefault(effect, 0.0D) : 0.0D;
+    }
+
+    public void setEffectDurationRemainder(UUID playerId, Holder<MobEffect> effect, double value) {
+        updateEffectMapRemainder(playerId, effect, value, rem -> rem.effectDurations);
+    }
+
+    public double getEffectTriggerRemainder(UUID playerId, Holder<MobEffect> effect) {
+        MutablePlayerRemainders rem = this.playerRemainders.get(playerId);
+        return rem != null ? rem.effectTriggers.getOrDefault(effect, 0.0D) : 0.0D;
+    }
+
+    public void setEffectTriggerRemainder(UUID playerId, Holder<MobEffect> effect, double value) {
+        updateEffectMapRemainder(playerId, effect, value, rem -> rem.effectTriggers);
+    }
+
+    private void updatePlayerRemainder(
+        UUID playerId,
+        double value,
+        java.util.function.ObjDoubleConsumer<MutablePlayerRemainders> setter
+    ) {
+        double sanitized = sanitizeRemainder(value);
+        if (sanitized <= 0.0D) {
+            MutablePlayerRemainders rem = this.playerRemainders.get(playerId);
+            if (rem != null) {
+                setter.accept(rem, 0.0D);
+                if (rem.isEmpty()) {
+                    this.playerRemainders.remove(playerId);
+                }
+            }
+            return;
+        }
+        MutablePlayerRemainders rem = this.playerRemainders.computeIfAbsent(playerId, ignored -> new MutablePlayerRemainders());
+        setter.accept(rem, sanitized);
+    }
+
+    private void updateEffectMapRemainder(
+        UUID playerId,
+        Holder<MobEffect> effect,
+        double value,
+        java.util.function.Function<MutablePlayerRemainders, Map<Holder<MobEffect>, Double>> mapGetter
+    ) {
+        double sanitized = sanitizeRemainder(value);
+        if (sanitized <= 0.0D) {
+            MutablePlayerRemainders rem = this.playerRemainders.get(playerId);
+            if (rem != null) {
+                mapGetter.apply(rem).remove(effect);
+                if (rem.isEmpty()) {
+                    this.playerRemainders.remove(playerId);
+                }
+            }
+            return;
+        }
+        MutablePlayerRemainders rem = this.playerRemainders.computeIfAbsent(playerId, ignored -> new MutablePlayerRemainders());
+        mapGetter.apply(rem).put(effect, sanitized);
+    }
+
+    public void clearPlayerVitalRemainders(UUID playerId) {
+        MutablePlayerRemainders rem = this.playerRemainders.get(playerId);
+        if (rem != null) {
+            rem.damage = 0.0D;
+            rem.heal = 0.0D;
+            rem.absorption = 0.0D;
+            rem.healthBoost = 0.0D;
+            rem.infestedChanceScale = 1.0D;
+            if (rem.isEmpty()) {
+                this.playerRemainders.remove(playerId);
+            }
+        }
+    }
+
+    public void clearPlayerRemainders(UUID playerId) {
+        this.playerRemainders.remove(playerId);
+    }
+
+    public void clearAllPlayerRemainders() {
+        this.playerRemainders.clear();
     }
 
     public void setExperience(int level, int total, float progress) {
@@ -580,17 +861,32 @@ public final class HiveMind {
         return true;
     }
 
-    public boolean isPrimaryEffectTicker(ServerPlayer player, long gameTime, List<ServerPlayer> aliveMembers) {
-        if (this.lastEffectTickGameTime != gameTime || this.primaryEffectTickerUuid == null) {
-            this.lastEffectTickGameTime = gameTime;
+    public boolean isPrimaryEffectTicker(
+        ServerPlayer player,
+        Holder<MobEffect> effectHolder,
+        long gameTime,
+        List<ServerPlayer> eligibleMembers
+    ) {
+        EffectTickClaim claim = this.primaryEffectTickers.get(effectHolder);
+        boolean chosenStillEligible = false;
+        if (claim != null && claim.gameTime() == gameTime && claim.tickerUuid() != null) {
+            for (ServerPlayer member : eligibleMembers) {
+                if (member.getUUID().equals(claim.tickerUuid())) {
+                    chosenStillEligible = true;
+                    break;
+                }
+            }
+        }
+        if (!chosenStillEligible) {
             UUID chosen = null;
-            for (ServerPlayer member : aliveMembers) {
+            for (ServerPlayer member : eligibleMembers) {
                 if (chosen == null || member.getUUID().compareTo(chosen) < 0) {
                     chosen = member.getUUID();
                 }
             }
-            this.primaryEffectTickerUuid = chosen;
+            claim = new EffectTickClaim(gameTime, chosen);
+            this.primaryEffectTickers.put(effectHolder, claim);
         }
-        return player.getUUID().equals(this.primaryEffectTickerUuid);
+        return player.getUUID().equals(claim.tickerUuid());
     }
 }

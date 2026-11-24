@@ -5,6 +5,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Share;
 import com.llamalad7.mixinextras.sugar.ref.LocalDoubleRef;
+import com.llamalad7.mixinextras.sugar.ref.LocalFloatRef;
 import com.llamalad7.mixinextras.sugar.ref.LocalRef;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveLivingEntityAccess;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindManager;
@@ -27,6 +28,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.Collection;
+import java.util.OptionalInt;
 
 @Mixin(LivingEntity.class)
 public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
@@ -39,6 +41,9 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
 
     @Invoker("decreaseAirSupply")
     protected abstract int oimr$invokeDecreaseAirSupply(int currentSupply);
+
+    @Invoker("checkTotemDeathProtection")
+    protected abstract boolean oimr$invokeCheckTotemDeathProtection(DamageSource source);
 
     @Override
     public EntityEquipment oimr$getEquipment() {
@@ -55,6 +60,32 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
         return this.oimr$invokeDecreaseAirSupply(currentSupply);
     }
 
+    @Override
+    public boolean oimr$checkTotemDeathProtection(DamageSource source) {
+        return this.oimr$invokeCheckTotemDeathProtection(source);
+    }
+
+    @Inject(method = "decreaseAirSupply", at = @At("HEAD"), cancellable = true)
+    private void oimr$sharedRespirationAirSupply(int currentSupply, CallbackInfoReturnable<Integer> cir) {
+        OptionalInt adjusted = HiveMindManager.tryDecreaseAirSupplyWithGroupRespiration(
+            (LivingEntity) (Object) this,
+            currentSupply
+        );
+        if (adjusted.isPresent()) {
+            cir.setReturnValue(adjusted.getAsInt());
+        }
+    }
+
+    @Inject(method = "checkTotemDeathProtection", at = @At("RETURN"), cancellable = true)
+    private void oimr$handleHiveTotem(DamageSource source, CallbackInfoReturnable<Boolean> cir) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (cir.getReturnValueZ()) {
+            HiveMindManager.onTotemActivated(self);
+        } else if (HiveMindManager.tryActivateGroupTotem(self, source)) {
+            cir.setReturnValue(true);
+        }
+    }
+
     @WrapWithCondition(
         method = "baseTick",
         at = @At(
@@ -63,7 +94,7 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
         )
     )
     private boolean oimr$suppressPerPlayerAirTick(LivingEntity instance, int supply) {
-        return !HiveMindManager.isAttachedServerPlayer(instance);
+        return !HiveMindManager.isFullAffinityEnvironmentShared(instance);
     }
 
     @WrapOperation(
@@ -80,7 +111,7 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
         float amount,
         Operation<Boolean> original
     ) {
-        if (source.is(DamageTypeTags.IS_DROWNING) && HiveMindManager.isAttachedServerPlayer(instance)) {
+        if (source.is(DamageTypeTags.IS_DROWNING) && HiveMindManager.isFullAffinityEnvironmentShared(instance)) {
             return false;
         }
         return original.call(instance, level, source, amount);
@@ -94,7 +125,7 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
         )
     )
     private boolean oimr$suppressPerPlayerFreezeThaw(LivingEntity instance, int ticks) {
-        return !HiveMindManager.isAttachedServerPlayer(instance);
+        return !HiveMindManager.isFullAffinityEnvironmentShared(instance);
     }
 
     @WrapOperation(
@@ -111,10 +142,24 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
         float amount,
         Operation<Boolean> original
     ) {
-        if (source.is(DamageTypeTags.IS_FREEZING) && HiveMindManager.isAttachedServerPlayer(instance)) {
+        if (source.is(DamageTypeTags.IS_FREEZING) && HiveMindManager.isFullAffinityEnvironmentShared(instance)) {
             return false;
         }
         return original.call(instance, level, source, amount);
+    }
+
+    @Inject(method = "heal", at = @At("HEAD"))
+    private void oimr$capturePreHeal(float amount, CallbackInfo ci, @Share("oimrPreHealHealth") LocalFloatRef preHealth) {
+        preHealth.set(((LivingEntity) (Object) this).getHealth());
+    }
+
+    @Inject(method = "heal", at = @At("RETURN"))
+    private void oimr$afterHeal(float amount, CallbackInfo ci, @Share("oimrPreHealHealth") LocalFloatRef preHealth) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        float healed = self.getHealth() - preHealth.get();
+        if (healed > 0.0F) {
+            HiveMindManager.onPlayerHealed(self, healed);
+        }
     }
 
     @Inject(method = "setHealth", at = @At("TAIL"))

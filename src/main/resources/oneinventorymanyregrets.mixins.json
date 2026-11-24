@@ -3,12 +3,14 @@
 	"package": "net.iakee.oneinventorymanyregrets.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
+		"AreaEffectCloudMixin",
 		"CombatTrackerMixin",
 		"EnchantmentMenuMixin",
 		"EntityEquipmentMixin",
 		"EntityMixin",
 		"FoodDataMixin",
 		"FoxMixin",
+		"InfestedMobEffectMixin",
 		"InventoryMixin",
 		"LivingEntityMixin",
 		"MerchantMenuMixin",
@@ -27,7 +29,8 @@
 		"ZombieVillagerMixin"
 	],
 	"client": [
-		"client.PauseScreenMixin"
+		"client.OptionsScreenMixin",
+		"client.PlayerTabOverlayMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

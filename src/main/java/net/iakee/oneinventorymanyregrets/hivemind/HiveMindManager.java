@@ -1,7 +1,10 @@
 package net.iakee.oneinventorymanyregrets.hivemind;
 
+import net.iakee.oneinventorymanyregrets.OIMRMod;
 import net.iakee.oneinventorymanyregrets.config.OIMRConfig;
+import net.iakee.oneinventorymanyregrets.network.OIMRNetworking;
 import net.minecraft.advancements.AdvancementHolder;
+import net.minecraft.advancements.triggers.CriteriaTriggers;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.NonNullList;
@@ -9,14 +12,18 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundSetExperiencePacket;
 import net.minecraft.network.protocol.game.ClientboundSetHealthPacket;
+import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.NameAndId;
+import net.minecraft.stats.Stats;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.DamageTypeTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.damagesource.DamageType;
 import net.minecraft.world.damagesource.DamageTypes;
@@ -29,16 +36,20 @@ import net.minecraft.world.entity.EntityReference;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.OwnableEntity;
+import net.minecraft.world.entity.ai.attributes.AttributeInstance;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.gossip.GossipType;
 import net.minecraft.world.entity.animal.fox.Fox;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownSplashPotion;
 import net.minecraft.world.food.FoodData;
 import net.minecraft.world.inventory.MerchantMenu;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.component.DeathProtection;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.scores.PlayerTeam;
@@ -57,7 +68,9 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
 
@@ -66,6 +79,8 @@ import java.util.UUID;
  */
 public final class HiveMindManager {
     private static final long POST_LOAD_SAFETY_DELAY_TICKS = 5L;
+    private static final double FRACTIONAL_EPSILON = 1.0E-6D;
+    private static final Identifier HEALTH_BOOST_MODIFIER_ID = Identifier.withDefaultNamespace("effect.health_boost");
 
     private static final Map<UUID, String> PLAYER_HIVES = new HashMap<>();
     private static final Map<UUID, String> KNOWN_PLAYER_HIVES = new HashMap<>();
@@ -76,7 +91,9 @@ public final class HiveMindManager {
     private static final Set<UUID> SUPPRESS_DEATH_CHAT = new HashSet<>();
     private static final Map<UUID, CapturedDeathContext> CAPTURED_DEATH_CONTEXTS = new HashMap<>();
     private static final Map<UUID, DamageSource> DYING_DAMAGE_SOURCES = new HashMap<>();
+    private static final Map<UUID, List<PendingDamageContribution>> PENDING_DAMAGE_SOURCES = new HashMap<>();
     private static @Nullable SplashImpactState splashImpact = null;
+    private static boolean pendingInvalidAffinityChatWarning = false;
 
     private static final Map<ResourceKey<DamageType>, String> SIMPLE_DEATH_MESSAGE_KEYS = Map.ofEntries(
         Map.entry(DamageTypes.DROWN, "death.oimr.drown"),
@@ -121,12 +138,16 @@ public final class HiveMindManager {
 
     private static boolean syncingEffects = false;
     private static boolean syncingHealth = false;
+    private static boolean syncingAffinityDamage = false;
+    private static boolean suppressAffinityVitalsCascade = false;
+    private static boolean applyingUnscaledHungerEffect = false;
     private static boolean syncingExperience = false;
     private static boolean syncingAdvancements = false;
     private static boolean syncingRecipes = false;
     private static boolean syncingEnvironment = false;
     private static boolean syncingRespawn = false;
     private static boolean syncingKnockback = false;
+    private static boolean handlingGroupTotem = false;
     private static int teamMutationDepth = 0;
     private static boolean cascadingDeath = false;
 
@@ -135,6 +156,10 @@ public final class HiveMindManager {
 
     public static void onServerStarted(MinecraftServer server) {
         OIMRConfig.load();
+        pendingInvalidAffinityChatWarning = OIMRConfig.consumeInvalidAffinityResetPending();
+        if (pendingInvalidAffinityChatWarning) {
+            OIMRMod.LOGGER.warn("Invalid OIMR affinity setting detected in config; affinity was reset to 100%.");
+        }
         PLAYER_HIVES.clear();
         KNOWN_PLAYER_HIVES.clear();
         ATTACHED_PLAYERS.clear();
@@ -144,15 +169,20 @@ public final class HiveMindManager {
         SUPPRESS_DEATH_CHAT.clear();
         CAPTURED_DEATH_CONTEXTS.clear();
         DYING_DAMAGE_SOURCES.clear();
+        PENDING_DAMAGE_SOURCES.clear();
         splashImpact = null;
         syncingEffects = false;
         syncingHealth = false;
+        syncingAffinityDamage = false;
+        suppressAffinityVitalsCascade = false;
+        applyingUnscaledHungerEffect = false;
         syncingExperience = false;
         syncingAdvancements = false;
         syncingRecipes = false;
         syncingEnvironment = false;
         syncingRespawn = false;
         syncingKnockback = false;
+        handlingGroupTotem = false;
         cascadingDeath = false;
         teamMutationDepth = 0;
         HiveMindData.get(server);
@@ -169,15 +199,21 @@ public final class HiveMindManager {
         SUPPRESS_DEATH_CHAT.clear();
         CAPTURED_DEATH_CONTEXTS.clear();
         DYING_DAMAGE_SOURCES.clear();
+        PENDING_DAMAGE_SOURCES.clear();
         splashImpact = null;
+        pendingInvalidAffinityChatWarning = false;
         syncingEffects = false;
         syncingHealth = false;
+        syncingAffinityDamage = false;
+        suppressAffinityVitalsCascade = false;
+        applyingUnscaledHungerEffect = false;
         syncingExperience = false;
         syncingAdvancements = false;
         syncingRecipes = false;
         syncingEnvironment = false;
         syncingRespawn = false;
         syncingKnockback = false;
+        handlingGroupTotem = false;
         cascadingDeath = false;
         teamMutationDepth = 0;
     }
@@ -199,6 +235,10 @@ public final class HiveMindManager {
 
     public static boolean isAttachedServerPlayer(Object entity) {
         return entity instanceof ServerPlayer player && isAttached(player);
+    }
+
+    public static boolean isFullAffinityEnvironmentShared(Object entity) {
+        return isAttachedServerPlayer(entity) && OIMRConfig.isFullAffinity();
     }
 
     public static String getHiveId(ServerPlayer player) {
@@ -242,15 +282,19 @@ public final class HiveMindManager {
         return members;
     }
 
+    private static boolean isVitalHazardTarget(ServerPlayer player) {
+        return !player.isDeadOrDying()
+            && !player.isCreative()
+            && !player.isSpectator()
+            && !player.getAbilities().invulnerable;
+    }
+
     public static int getHungerScaleDenominator(MinecraftServer server, String hiveId) {
         int count = 0;
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             if (ATTACHED_PLAYERS.contains(player)
                 && hiveId.equals(PLAYER_HIVES.get(player.getUUID()))
-                && !player.isDeadOrDying()
-                && !player.isCreative()
-                && !player.isSpectator()
-                && !player.getAbilities().invulnerable) {
+                && isVitalHazardTarget(player)) {
                 count++;
             }
         }
@@ -273,7 +317,27 @@ public final class HiveMindManager {
         MinecraftServer server = player.level().getServer();
         if (server != null) {
             PENDING_POST_LOAD_CHECKS.put(player.getUUID(), server.overworld().getGameTime() + POST_LOAD_SAFETY_DELAY_TICKS);
+            broadcastInvalidAffinityWarningIfPending(server);
         }
+    }
+
+    public static void notifyIfInvalidAffinityReset(@Nullable MinecraftServer server) {
+        if (OIMRConfig.consumeInvalidAffinityResetPending()) {
+            OIMRMod.LOGGER.warn("Invalid OIMR affinity setting detected in config; affinity was reset to 100%.");
+            pendingInvalidAffinityChatWarning = true;
+        }
+        if (server != null) {
+            broadcastInvalidAffinityWarningIfPending(server);
+        }
+    }
+
+    private static void broadcastInvalidAffinityWarningIfPending(MinecraftServer server) {
+        if (!pendingInvalidAffinityChatWarning || server.getPlayerList().getPlayers().isEmpty()) {
+            return;
+        }
+        pendingInvalidAffinityChatWarning = false;
+        Component warning = OIMRLang.translatable("oimr.warning.affinity_reset");
+        server.getPlayerList().broadcastSystemMessage(warning, recipient -> OIMRLang.localizeForPlayer(warning, recipient), false);
     }
 
     public static void onPlayerLeave(ServerPlayer player) {
@@ -283,7 +347,7 @@ public final class HiveMindManager {
         if (hive != null) {
             MinecraftServer server = player.level().getServer();
             if (server != null) {
-                if (!player.isDeadOrDying()) {
+                if (OIMRConfig.isFullAffinity() && !player.isDeadOrDying()) {
                     hive.snapshotEffectsFrom(player.getActiveEffects());
                     hive.setHealth(player.getHealth());
                     hive.setAbsorption(player.getAbsorptionAmount());
@@ -309,7 +373,7 @@ public final class HiveMindManager {
             hive.markInitializedEmpty();
         }
 
-        if (!alive) {
+        if (!alive && OIMRConfig.isFullAffinity()) {
             boolean anyAliveMember = !getAliveMembers(server, hiveId).isEmpty();
             if (!anyAliveMember) {
                 hive.resetVitalsForRespawn(newPlayer.getMaxHealth());
@@ -329,10 +393,11 @@ public final class HiveMindManager {
         String hiveId = getHiveId(player);
         HiveMindData data = HiveMindData.get(server);
         HiveMind hive = data.getOrCreate(hiveId);
+        PersonalInventoryState personal = data.getOrCreatePersonalState(player.getUUID());
 
         if (!hive.isInitialized()) {
             if (allowInitialCapture && HiveMindData.DEFAULT_HIVE_ID.equals(hiveId)) {
-                hive.initializeFrom(player);
+                hive.initializeFrom(player, personal);
             } else {
                 hive.markInitializedEmpty();
             }
@@ -343,10 +408,12 @@ public final class HiveMindManager {
         KNOWN_PLAYER_HIVES.put(player.getUUID(), hiveId);
         ATTACHED_PLAYERS.add(player);
 
-        ((HiveInventoryAccess) player.getInventory()).oimr$setItems(hive.getItems());
+        ((HiveInventoryAccess) player.getInventory())
+            .oimr$setItems(HiveRoutedNonNullList.create(hive.getItems(), personal.getHotbarItems()));
         ((HiveInventoryAccess) player.getEnderChestInventory()).oimr$setItems(hive.getEnderChestItems());
-        ((HiveEquipmentAccess) ((HiveLivingEntityAccess) player).oimr$getEquipment())
-            .oimr$setEquipmentItems(hive.getEquipmentMap());
+        HiveEquipmentAccess equipAccess = (HiveEquipmentAccess) ((HiveLivingEntityAccess) player).oimr$getEquipment();
+        equipAccess.oimr$setEquipmentItems(hive.getEquipmentMap());
+        equipAccess.oimr$setRoutedMaps(hive.getEquipmentMap(), personal.getEquipmentMap());
         ((HiveFoodDataAccess) player).oimr$setFoodData(hive.getFoodData());
 
         syncingRespawn = true;
@@ -374,12 +441,13 @@ public final class HiveMindManager {
             syncingRecipes = false;
         }
 
+        ((HiveLivingEntityAccess) player).oimr$detectEquipmentUpdates();
+
         if (syncVitals && !player.isDeadOrDying()) {
             syncVitalsToPlayer(player, server, hiveId, hive, true);
         }
 
         player.inventoryMenu.sendAllDataToRemote();
-        ((HiveLivingEntityAccess) player).oimr$detectEquipmentUpdates();
     }
 
     public static void resyncPlayerFromHive(ServerPlayer player) {
@@ -399,6 +467,7 @@ public final class HiveMindManager {
             return;
         }
 
+        ((HiveLivingEntityAccess) player).oimr$detectEquipmentUpdates();
         syncVitalsToPlayer(player, server, hiveId, hive, false);
         ((HivePlayerProgressAccess) player).oimr$setEnchantmentSeed(hive.getEnchantmentSeed());
         if (player.containerMenu instanceof HiveEnchantmentMenuAccess enchantMenu
@@ -406,7 +475,6 @@ public final class HiveMindManager {
             enchantMenu.oimr$refreshSeed(hive.getEnchantmentSeed());
         }
         player.inventoryMenu.sendAllDataToRemote();
-        ((HiveLivingEntityAccess) player).oimr$detectEquipmentUpdates();
     }
 
     private static void syncVitalsToPlayer(
@@ -416,44 +484,46 @@ public final class HiveMindManager {
         HiveMind hive,
         boolean forceApplyEffects
     ) {
-        ServerPlayer otherAliveRep = null;
-        for (ServerPlayer member : getAliveMembers(server, hiveId)) {
-            if (member != player) {
-                otherAliveRep = member;
-                break;
+        if (OIMRConfig.isFullAffinity()) {
+            ServerPlayer otherAliveRep = null;
+            for (ServerPlayer member : getAliveMembers(server, hiveId)) {
+                if (member != player) {
+                    otherAliveRep = member;
+                    break;
+                }
             }
-        }
 
-        if (otherAliveRep != null) {
-            hive.snapshotEffectsFrom(otherAliveRep.getActiveEffects());
-            hive.setHealth(otherAliveRep.getHealth());
-            hive.setAbsorption(otherAliveRep.getAbsorptionAmount());
-        } else if (hive.getHealth() <= 0.0F) {
-            hive.resetVitalsForRespawn(player.getMaxHealth());
-            HiveMindData.get(server).setDirty();
-        }
+            if (otherAliveRep != null) {
+                hive.snapshotEffectsFrom(otherAliveRep.getActiveEffects());
+                hive.setHealth(otherAliveRep.getHealth());
+                hive.setAbsorption(otherAliveRep.getAbsorptionAmount());
+            } else if (hive.getHealth() <= 0.0F) {
+                hive.resetVitalsForRespawn(player.getMaxHealth());
+                HiveMindData.get(server).setDirty();
+            }
 
-        if (forceApplyEffects || effectsDiffer(player, hive)) {
-            applyHiveEffectsToPlayer(player, hive);
-        }
+            if (forceApplyEffects || effectsDiffer(player, hive)) {
+                applyHiveEffectsToPlayer(player, hive);
+            }
 
-        syncingHealth = true;
-        try {
-            float targetHealth = hive.getHealth() > 0.0F ? hive.getHealth() : player.getMaxHealth();
-            player.setHealth(Mth.clamp(targetHealth, 0.01F, player.getMaxHealth()));
-            player.setAbsorptionAmount(Mth.clamp(hive.getAbsorption(), 0.0F, player.getMaxAbsorption()));
-        } finally {
-            syncingHealth = false;
-        }
+            syncingHealth = true;
+            try {
+                float targetHealth = hive.getHealth() > 0.0F ? hive.getHealth() : player.getMaxHealth();
+                player.setHealth(Mth.clamp(targetHealth, 0.01F, player.getMaxHealth()));
+                player.setAbsorptionAmount(Mth.clamp(hive.getAbsorption(), 0.0F, player.getMaxAbsorption()));
+            } finally {
+                syncingHealth = false;
+            }
 
-        syncingEnvironment = true;
-        try {
-            player.setAirSupply(Mth.clamp(hive.getAirSupply(), -20, player.getMaxAirSupply()));
-            player.setRemainingFireTicks(hive.getRemainingFireTicks());
-            player.setSharedFlagOnFire(hive.getRemainingFireTicks() > 0);
-            player.setTicksFrozen(hive.getTicksFrozen());
-        } finally {
-            syncingEnvironment = false;
+            syncingEnvironment = true;
+            try {
+                player.setAirSupply(Mth.clamp(hive.getAirSupply(), -20, player.getMaxAirSupply()));
+                player.setRemainingFireTicks(hive.getRemainingFireTicks());
+                player.setSharedFlagOnFire(hive.getRemainingFireTicks() > 0);
+                player.setTicksFrozen(hive.getTicksFrozen());
+            } finally {
+                syncingEnvironment = false;
+            }
         }
 
         syncingExperience = true;
@@ -501,9 +571,37 @@ public final class HiveMindManager {
             .oimr$setItems(NonNullList.withSize(HiveMind.MAIN_INVENTORY_SIZE, ItemStack.EMPTY));
         ((HiveInventoryAccess) player.getEnderChestInventory())
             .oimr$setItems(NonNullList.withSize(HiveMind.ENDER_CHEST_SIZE, ItemStack.EMPTY));
-        ((HiveEquipmentAccess) ((HiveLivingEntityAccess) player).oimr$getEquipment())
-            .oimr$setEquipmentItems(new EnumMap<>(EquipmentSlot.class));
+        HiveEquipmentAccess equipAccess = (HiveEquipmentAccess) ((HiveLivingEntityAccess) player).oimr$getEquipment();
+        equipAccess.oimr$setRoutedMaps(null, null);
+        equipAccess.oimr$setEquipmentItems(new EnumMap<>(EquipmentSlot.class));
         ((HiveFoodDataAccess) player).oimr$setFoodData(new FoodData());
+    }
+
+    public static void onConfigChanged(@Nullable MinecraftServer server) {
+        if (server == null) {
+            return;
+        }
+        HiveMindData data = HiveMindData.get(server);
+        if (OIMRConfig.isFullAffinity()) {
+            PENDING_DAMAGE_SOURCES.clear();
+            for (HiveMind hive : data.getAll()) {
+                hive.clearAllPlayerRemainders();
+                List<ServerPlayer> alive = getAliveMembers(server, hive.getId());
+                if (!alive.isEmpty()) {
+                    ServerPlayer rep = alive.getFirst();
+                    hive.snapshotEffectsFrom(rep.getActiveEffects());
+                    hive.setHealth(rep.getHealth());
+                    hive.setAbsorption(rep.getAbsorptionAmount());
+                }
+            }
+        }
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (isAttached(player)) {
+                resyncPlayerFromHive(player);
+            }
+        }
+        data.setDirty();
+        OIMRNetworking.syncToAll(server);
     }
 
     private static void applyHiveEffectsToPlayer(ServerPlayer player, HiveMind hive) {
@@ -545,6 +643,12 @@ public final class HiveMindManager {
             }
             String expectedHiveId = getHiveId(player);
             if (!expectedHiveId.equals(currentHiveId)) {
+                HiveMind oldHive = HiveMindData.get(server).getIfPresent(currentHiveId);
+                if (oldHive != null) {
+                    oldHive.clearPlayerRemainders(player.getUUID());
+                    HiveMindData.get(server).setDirty();
+                }
+                PENDING_DAMAGE_SOURCES.remove(player.getUUID());
                 if (!player.isDeadOrDying()) {
                     player.doCloseContainer();
                 }
@@ -615,7 +719,7 @@ public final class HiveMindManager {
                 }
             }
 
-            if (!aliveMembers.isEmpty()) {
+            if (!aliveMembers.isEmpty() && OIMRConfig.isFullAffinity()) {
                 tickHiveEnvironment(hive, aliveMembers, gameTime, data);
                 ServerPlayer rep = aliveMembers.getFirst();
                 hive.snapshotEffectsFrom(rep.getActiveEffects());
@@ -671,17 +775,21 @@ public final class HiveMindManager {
         // 2. Fire ticks (1x countdown + 1x damage across party)
         int prevFire = hive.getRemainingFireTicks();
         if (prevFire > 0) {
+            boolean allFireImmune = true;
             ServerPlayer burner = null;
             for (ServerPlayer member : aliveMembers) {
                 if (!member.fireImmune()) {
-                    burner = member;
-                    break;
+                    allFireImmune = false;
+                    if (isVitalHazardTarget(member)) {
+                        burner = member;
+                        break;
+                    }
                 }
             }
-            if (burner == null) {
+            if (allFireImmune) {
                 hive.setRemainingFireTicks(0);
             } else {
-                if (prevFire % 20 == 0 && !burner.isInLava()) {
+                if (burner != null && prevFire % 20 == 0 && !burner.isInLava()) {
                     burner.hurtServer(burner.level(), burner.damageSources().onFire(), 1.0F);
                 }
                 hive.setRemainingFireTicks(prevFire - 1);
@@ -734,7 +842,7 @@ public final class HiveMindManager {
     }
 
     public static void onPlayerIgnited(Entity entity) {
-        if (syncingEnvironment || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
+        if (syncingEnvironment || !OIMRConfig.isFullAffinity() || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
             return;
         }
         MinecraftServer server = player.level().getServer();
@@ -757,7 +865,7 @@ public final class HiveMindManager {
     }
 
     public static void onPlayerClearFire(Entity entity) {
-        if (syncingEnvironment || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
+        if (syncingEnvironment || !OIMRConfig.isFullAffinity() || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
             return;
         }
         MinecraftServer server = player.level().getServer();
@@ -790,7 +898,7 @@ public final class HiveMindManager {
     }
 
     public static void onPlayerTicksFrozenChanged(Entity entity, int ticks) {
-        if (syncingEnvironment || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
+        if (syncingEnvironment || !OIMRConfig.isFullAffinity() || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
             return;
         }
         MinecraftServer server = player.level().getServer();
@@ -823,7 +931,7 @@ public final class HiveMindManager {
     }
 
     public static void onPlayerAirSupplyChanged(Entity entity, int supply) {
-        if (syncingEnvironment || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
+        if (syncingEnvironment || !OIMRConfig.isFullAffinity() || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
             return;
         }
         MinecraftServer server = player.level().getServer();
@@ -841,13 +949,48 @@ public final class HiveMindManager {
         syncEnvironmentToMembers(hive, getAliveMembers(server, hiveId));
     }
 
+    public static OptionalInt tryDecreaseAirSupplyWithGroupRespiration(LivingEntity entity, int currentSupply) {
+        if (!(entity instanceof ServerPlayer player) || !isAttached(player)) {
+            return OptionalInt.empty();
+        }
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return OptionalInt.empty();
+        }
+        String hiveId = PLAYER_HIVES.get(player.getUUID());
+        if (hiveId == null) {
+            return OptionalInt.empty();
+        }
+
+        double ownBonus = Math.max(0.0D, player.getAttributeValue(Attributes.OXYGEN_BONUS));
+        double maxOtherBonus = 0.0D;
+        for (ServerPlayer member : getAliveMembers(server, hiveId)) {
+            if (member != player && isVitalHazardTarget(member)) {
+                double memberBonus = Math.max(0.0D, member.getAttributeValue(Attributes.OXYGEN_BONUS));
+                if (memberBonus > maxOtherBonus) {
+                    maxOtherBonus = memberBonus;
+                }
+            }
+        }
+        double effectiveBonus = Math.max(ownBonus, maxOtherBonus * OIMRConfig.getAffinityFactor());
+        if (effectiveBonus > 0.0D && player.getRandom().nextDouble() >= 1.0D / (effectiveBonus + 1.0D)) {
+            return OptionalInt.of(currentSupply);
+        }
+        return OptionalInt.of(currentSupply - 1);
+    }
+
     public static void beginSplashPotionImpact() {
-        splashImpact = new SplashImpactState();
+        beginPotionImpact(true);
+    }
+
+    public static void beginPotionImpact(boolean stackDurations) {
+        splashImpact = new SplashImpactState(stackDurations);
     }
 
     public static boolean captureSplashPotionEffect(LivingEntity target, MobEffectInstance effect) {
         if (splashImpact == null
             || syncingEffects
+            || !OIMRConfig.isFullAffinity()
             || !(target instanceof ServerPlayer player)
             || !isAttached(player)
             || player.isDeadOrDying()) {
@@ -864,61 +1007,145 @@ public final class HiveMindManager {
         return true;
     }
 
-    public static void endSplashPotionImpact(ThrownSplashPotion potion) {
+    public static boolean captureInstantaneousPotionEffect(
+        MobEffect mobEffect,
+        LivingEntity target,
+        int amplifier,
+        double healthFactor
+    ) {
+        if (splashImpact == null
+            || syncingEffects
+            || !OIMRConfig.isFullAffinity()
+            || !(target instanceof ServerPlayer player)
+            || !isAttached(player)
+            || player.isDeadOrDying()) {
+            return false;
+        }
+        String hiveId = PLAYER_HIVES.get(player.getUUID());
+        if (hiveId == null) {
+            return false;
+        }
+        splashImpact.recordInstantaneous(hiveId, mobEffect, player, amplifier, healthFactor);
+        return true;
+    }
+
+    public static void endSplashPotionImpact(Entity potion, @Nullable Entity effectSource) {
         SplashImpactState state = splashImpact;
         splashImpact = null;
-        if (state == null || state.isEmpty()) {
+        if (state == null || state.isEmpty() || !(potion.level() instanceof ServerLevel level)) {
             return;
         }
-        MinecraftServer server = potion.level().getServer();
-        if (server == null) {
-            return;
-        }
-
+        MinecraftServer server = level.getServer();
         HiveMindData data = HiveMindData.get(server);
-        Entity effectSource = potion.getEffectSource();
-        syncingEffects = true;
-        try {
-            for (SplashImpactAccumulator entry : state.entries.values()) {
-                HiveMind hive = data.getIfPresent(entry.hiveId);
-                if (hive == null) {
-                    continue;
-                }
-                MobEffectInstance splashEffect = new MobEffectInstance(
-                    entry.effect,
-                    entry.totalDuration,
-                    entry.amplifier,
-                    entry.ambient,
-                    entry.visible
-                );
-                MobEffectInstance existing = hive.getEffects().get(entry.effect);
-                MobEffectInstance resolved;
-                if (existing == null) {
-                    resolved = splashEffect;
-                } else {
-                    resolved = new MobEffectInstance(existing);
-                    resolved.update(splashEffect);
-                }
+        if (!state.entries.isEmpty()) {
+            syncingEffects = true;
+            try {
+                for (SplashImpactAccumulator entry : state.entries.values()) {
+                    HiveMind hive = data.getIfPresent(entry.hiveId);
+                    if (hive == null) {
+                        continue;
+                    }
+                    MobEffectInstance splashEffect = new MobEffectInstance(
+                        entry.effect,
+                        entry.totalDuration,
+                        entry.amplifier,
+                        entry.ambient,
+                        entry.visible
+                    );
+                    MobEffectInstance existing = hive.getEffects().get(entry.effect);
+                    MobEffectInstance resolved;
+                    if (existing == null) {
+                        resolved = splashEffect;
+                    } else {
+                        resolved = new MobEffectInstance(existing);
+                        resolved.update(splashEffect);
+                    }
 
-                hive.putEffect(resolved);
-                data.setDirty();
+                    hive.putEffect(resolved);
+                    data.setDirty();
 
-                for (ServerPlayer member : getAliveMembers(server, entry.hiveId)) {
-                    MobEffectInstance copy = new MobEffectInstance(resolved);
-                    member.forceAddEffect(copy, effectSource);
-                    copy.onEffectStarted(member);
+                    for (ServerPlayer member : getAliveMembers(server, entry.hiveId)) {
+                        MobEffectInstance copy = new MobEffectInstance(resolved);
+                        member.forceAddEffect(copy, effectSource);
+                        copy.onEffectStarted(member);
+                    }
+                    if (MobEffects.HERO_OF_THE_VILLAGE.equals(entry.effect)) {
+                        refreshOpenMerchantPricesForHive(server, entry.hiveId);
+                    }
                 }
-                if (MobEffects.HERO_OF_THE_VILLAGE.equals(entry.effect)) {
-                    refreshOpenMerchantPricesForHive(server, entry.hiveId);
-                }
+            } finally {
+                syncingEffects = false;
             }
-        } finally {
-            syncingEffects = false;
+        }
+        for (InstantaneousImpactEntry entry : state.instantEntries.values()) {
+            if (entry.target.isAlive() && isAttached(entry.target)) {
+                entry.effect.applyInstantaneousEffect(
+                    level,
+                    potion,
+                    effectSource,
+                    entry.target,
+                    entry.amplifier,
+                    entry.healthFactor
+                );
+            }
         }
     }
 
+    private static int getEffectDurationUnitTicks(Holder<MobEffect> effectHolder, int amplifier) {
+        if (effectHolder.is(MobEffects.POISON)) {
+            return Math.max(1, 25 >> amplifier);
+        }
+        if (effectHolder.is(MobEffects.WITHER)) {
+            return Math.max(1, 40 >> amplifier);
+        }
+        if (effectHolder.is(MobEffects.REGENERATION)) {
+            return Math.max(1, 50 >> amplifier);
+        }
+        if (effectHolder.is(MobEffects.DARKNESS)) {
+            return 22;
+        }
+        if (effectHolder.is(MobEffects.NAUSEA)) {
+            return 60;
+        }
+        return 1;
+    }
+
+    private static boolean isFoodSharedDirectEffect(Holder<MobEffect> effectHolder) {
+        return effectHolder.is(MobEffects.SATURATION) || effectHolder.is(MobEffects.HUNGER);
+    }
+
+    private static boolean isOmenTriggerEffect(Holder<MobEffect> effectHolder) {
+        return effectHolder.is(MobEffects.BAD_OMEN) || effectHolder.is(MobEffects.TRIAL_OMEN);
+    }
+
+    private static boolean isDeathTriggerEffect(Holder<MobEffect> effectHolder) {
+        return effectHolder.is(MobEffects.WIND_CHARGED)
+            || effectHolder.is(MobEffects.WEAVING)
+            || effectHolder.is(MobEffects.OOZING);
+    }
+
+    private static boolean isEffectStrongerOrLonger(MobEffectInstance candidate, @Nullable MobEffectInstance current) {
+        if (current == null) {
+            return true;
+        }
+        if (candidate.getAmplifier() != current.getAmplifier()) {
+            return candidate.getAmplifier() > current.getAmplifier();
+        }
+        if (candidate.isInfiniteDuration()) {
+            return !current.isInfiniteDuration();
+        }
+        if (current.isInfiniteDuration()) {
+            return false;
+        }
+        return candidate.getDuration() > current.getDuration();
+    }
+
     public static void onEffectAddedOrUpdated(LivingEntity entity, MobEffectInstance effect, Entity source) {
-        if (syncingEffects || splashImpact != null || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
+        if (syncingEffects
+            || (splashImpact != null && OIMRConfig.isFullAffinity())
+            || !(entity instanceof ServerPlayer player)
+            || !isAttached(player)
+            || player.isDeadOrDying()) {
             return;
         }
         MinecraftServer server = player.level().getServer();
@@ -928,6 +1155,201 @@ public final class HiveMindManager {
         String hiveId = PLAYER_HIVES.get(player.getUUID());
         HiveMind hive = HiveMindData.get(server).getIfPresent(hiveId);
         if (hive == null) {
+            return;
+        }
+
+        if (!OIMRConfig.isFullAffinity()) {
+            Holder<MobEffect> effectHolder = effect.getEffect();
+            if (effectHolder.is(MobEffects.INFESTED)) {
+                hive.setInfestedChanceScale(player.getUUID(), 1.0D);
+                HiveMindData.get(server).setDirty();
+            }
+            if (isFoodSharedDirectEffect(effectHolder) || effectHolder.is(MobEffects.RAID_OMEN)) {
+                return;
+            }
+
+            double factor = OIMRConfig.getAffinityFactorDouble();
+            if (factor <= 0.0D) {
+                return;
+            }
+            int fullAmplifier = effect.getAmplifier();
+            boolean infinite = effect.isInfiniteDuration();
+            boolean omenTrigger = isOmenTriggerEffect(effectHolder);
+            boolean deathTrigger = isDeathTriggerEffect(effectHolder);
+            double scaledDuration = (infinite || omenTrigger || deathTrigger) ? 0.0D : (double) effect.getDuration() * factor;
+            int unitTicks = (infinite || omenTrigger || deathTrigger) ? 1 : getEffectDurationUnitTicks(effectHolder, fullAmplifier);
+            boolean dirty = false;
+
+            syncingEffects = true;
+            try {
+                for (ServerPlayer other : getAliveMembers(server, hiveId)) {
+                    if (other == player) {
+                        continue;
+                    }
+                    MobEffectInstance probe = new MobEffectInstance(
+                        effectHolder,
+                        (infinite || omenTrigger || deathTrigger) ? effect.getDuration() : unitTicks,
+                        fullAmplifier,
+                        effect.isAmbient(),
+                        effect.isVisible(),
+                        effect.showIcon()
+                    );
+                    if (!other.canBeAffected(probe)) {
+                        continue;
+                    }
+
+                    MobEffectInstance current = other.getEffect(effectHolder);
+                    if (omenTrigger || deathTrigger) {
+                        double gain = omenTrigger ? (fullAmplifier + 1) * factor : factor;
+                        double totalTrigger = hive.getEffectTriggerRemainder(other.getUUID(), effectHolder) + gain;
+                        int grantedUnits = Mth.floor(totalTrigger + FRACTIONAL_EPSILON);
+                        double nextTriggerRem = Math.max(0.0D, totalTrigger - grantedUnits);
+                        hive.setEffectTriggerRemainder(other.getUUID(), effectHolder, nextTriggerRem);
+                        dirty = true;
+                        if (grantedUnits < 1) {
+                            continue;
+                        }
+                        int targetAmp = omenTrigger ? (grantedUnits - 1) : fullAmplifier;
+                        MobEffectInstance triggered = new MobEffectInstance(
+                            effectHolder,
+                            effect.getDuration(),
+                            targetAmp,
+                            effect.isAmbient(),
+                            effect.isVisible(),
+                            effect.showIcon()
+                        );
+                        if (isEffectStrongerOrLonger(triggered, current)) {
+                            other.forceAddEffect(triggered, source);
+                            triggered.onEffectStarted(other);
+                        }
+                        continue;
+                    }
+
+                    int targetDuration;
+                    double nextDurationRem = hive.getEffectDurationRemainder(other.getUUID(), effectHolder);
+                    if (infinite) {
+                        targetDuration = effect.getDuration();
+                    } else {
+                        if (current != null && (current.isInfiniteDuration() || current.getAmplifier() > fullAmplifier)) {
+                            continue;
+                        }
+                        double totalDuration = nextDurationRem + scaledDuration;
+                        int units = Mth.floor((totalDuration + FRACTIONAL_EPSILON) / unitTicks);
+                        targetDuration = units * unitTicks;
+                        nextDurationRem = Math.max(0.0D, totalDuration - targetDuration);
+                        hive.setEffectDurationRemainder(other.getUUID(), effectHolder, nextDurationRem);
+                        dirty = true;
+                    }
+
+                    if (MobEffects.ABSORPTION.equals(effectHolder)) {
+                        double totalAbsorb = hive.getAbsorptionRemainder(other.getUUID()) + ((fullAmplifier + 1) * 4.0D * factor);
+                        if (totalAbsorb + FRACTIONAL_EPSILON < 1.0D || (!infinite && targetDuration < unitTicks)) {
+                            hive.setAbsorptionRemainder(other.getUUID(), totalAbsorb);
+                            if (!infinite && targetDuration >= unitTicks) {
+                                // Keep duration accumulated while waiting for >= 1.0 absorption shield.
+                                hive.setEffectDurationRemainder(other.getUUID(), effectHolder, nextDurationRem + targetDuration);
+                            }
+                            dirty = true;
+                            continue;
+                        }
+                        float grantedAbsorption = (float) (totalAbsorb < 1.0D && totalAbsorb + FRACTIONAL_EPSILON >= 1.0D ? 1.0D : totalAbsorb);
+                        hive.setAbsorptionRemainder(other.getUUID(), 0.0D);
+                        dirty = true;
+                        MobEffectInstance scaled = new MobEffectInstance(
+                            effectHolder,
+                            targetDuration,
+                            fullAmplifier,
+                            effect.isAmbient(),
+                            effect.isVisible(),
+                            effect.showIcon()
+                        );
+                        if (isEffectStrongerOrLonger(scaled, current)) {
+                            float prevAbsorb = other.getAbsorptionAmount();
+                            other.forceAddEffect(scaled, source);
+                            scaled.onEffectStarted(other);
+                            float targetAbsorb = Math.max(prevAbsorb, grantedAbsorption);
+                            other.setAbsorptionAmount(Mth.clamp(targetAbsorb, 0.0F, other.getMaxAbsorption()));
+                        }
+                        continue;
+                    }
+
+                    if (MobEffects.HEALTH_BOOST.equals(effectHolder)) {
+                        double totalBoost = hive.getHealthBoostRemainder(other.getUUID()) + ((fullAmplifier + 1) * 4.0D * factor);
+                        int wholeBoost = Mth.floor(totalBoost + FRACTIONAL_EPSILON);
+                        if (wholeBoost < 1 || (!infinite && targetDuration < unitTicks)) {
+                            hive.setHealthBoostRemainder(other.getUUID(), totalBoost);
+                            if (!infinite && targetDuration >= unitTicks) {
+                                hive.setEffectDurationRemainder(other.getUUID(), effectHolder, nextDurationRem + targetDuration);
+                            }
+                            dirty = true;
+                            continue;
+                        }
+                        double nextBoostRem = Math.max(0.0D, totalBoost - wholeBoost);
+                        hive.setHealthBoostRemainder(other.getUUID(), nextBoostRem);
+                        dirty = true;
+                        MobEffectInstance scaled = new MobEffectInstance(
+                            effectHolder,
+                            targetDuration,
+                            fullAmplifier,
+                            effect.isAmbient(),
+                            effect.isVisible(),
+                            effect.showIcon()
+                        );
+                        if (isEffectStrongerOrLonger(scaled, current)) {
+                            AttributeInstance maxHealthAttr = other.getAttribute(Attributes.MAX_HEALTH);
+                            double prevBoostAmount = 0.0D;
+                            if (current != null && maxHealthAttr != null) {
+                                AttributeModifier existingMod = maxHealthAttr.getModifier(HEALTH_BOOST_MODIFIER_ID);
+                                if (existingMod != null) {
+                                    prevBoostAmount = existingMod.amount();
+                                }
+                            }
+                            other.forceAddEffect(scaled, source);
+                            scaled.onEffectStarted(other);
+                            if (maxHealthAttr != null) {
+                                double targetBoostAmount = Math.max(prevBoostAmount, wholeBoost);
+                                maxHealthAttr.addOrUpdateTransientModifier(
+                                    new AttributeModifier(HEALTH_BOOST_MODIFIER_ID, targetBoostAmount, AttributeModifier.Operation.ADD_VALUE)
+                                );
+                                if (other.getHealth() > other.getMaxHealth()) {
+                                    other.setHealth(other.getMaxHealth());
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    if (!infinite && targetDuration < unitTicks) {
+                        continue;
+                    }
+
+                    MobEffectInstance scaled = new MobEffectInstance(
+                        effectHolder,
+                        targetDuration,
+                        fullAmplifier,
+                        effect.isAmbient(),
+                        effect.isVisible(),
+                        effect.showIcon()
+                    );
+                    if (isEffectStrongerOrLonger(scaled, current)) {
+                        other.forceAddEffect(scaled, source);
+                        scaled.onEffectStarted(other);
+                        if (MobEffects.INFESTED.equals(effectHolder)) {
+                            double existingScale = current != null ? hive.getInfestedChanceScale(other.getUUID()) : 0.0D;
+                            hive.setInfestedChanceScale(other.getUUID(), Math.max(existingScale, factor));
+                            dirty = true;
+                        }
+                    }
+                }
+            } finally {
+                syncingEffects = false;
+            }
+            if (dirty) {
+                HiveMindData.get(server).setDirty();
+            }
+            if (MobEffects.HERO_OF_THE_VILLAGE.equals(effectHolder)) {
+                refreshOpenMerchantPricesForHive(server, hiveId);
+            }
             return;
         }
 
@@ -977,6 +1399,16 @@ public final class HiveMindManager {
             return;
         }
 
+        if (!OIMRConfig.isFullAffinity()) {
+            for (MobEffectInstance removed : removedEffects) {
+                if (MobEffects.INFESTED.equals(removed.getEffect())) {
+                    hive.setInfestedChanceScale(player.getUUID(), 1.0D);
+                    HiveMindData.get(server).setDirty();
+                }
+            }
+            return;
+        }
+
         boolean heroRemoved = false;
         for (MobEffectInstance removed : removedEffects) {
             if (MobEffects.HERO_OF_THE_VILLAGE.equals(removed.getEffect())) {
@@ -1008,7 +1440,12 @@ public final class HiveMindManager {
         if (!(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
             return true;
         }
-        if (!effectHolder.is(MobEffects.POISON)
+        boolean alwaysDeduplicated = effectHolder.is(MobEffects.SATURATION);
+        if (!alwaysDeduplicated && !OIMRConfig.isFullAffinity()) {
+            return true;
+        }
+        if (!alwaysDeduplicated
+            && !effectHolder.is(MobEffects.POISON)
             && !effectHolder.is(MobEffects.WITHER)
             && !effectHolder.is(MobEffects.REGENERATION)) {
             return true;
@@ -1024,11 +1461,52 @@ public final class HiveMindManager {
             return true;
         }
 
-        List<ServerPlayer> aliveMembers = getAliveMembers(server, hiveId);
-        if (aliveMembers.size() <= 1) {
+        List<ServerPlayer> eligible = new ArrayList<>();
+        for (ServerPlayer member : getAliveMembers(server, hiveId)) {
+            if (isVitalHazardTarget(member) && member.hasEffect(effectHolder)) {
+                eligible.add(member);
+            }
+        }
+        if (eligible.isEmpty() || !isVitalHazardTarget(player)) {
+            return false;
+        }
+        if (eligible.size() == 1) {
             return true;
         }
-        return hive.isPrimaryEffectTicker(player, server.overworld().getGameTime(), aliveMembers);
+        return hive.isPrimaryEffectTicker(player, effectHolder, server.overworld().getGameTime(), eligible);
+    }
+
+    public static int beginPeriodicEffectTick(LivingEntity target, Holder<MobEffect> effectHolder) {
+        if (OIMRConfig.isFullAffinity() || !isAttachedServerPlayer(target)) {
+            return 0;
+        }
+        int flags = 0;
+        if (!suppressAffinityVitalsCascade) {
+            suppressAffinityVitalsCascade = true;
+            flags |= 1;
+        }
+        if (effectHolder.is(MobEffects.HUNGER) && !applyingUnscaledHungerEffect) {
+            applyingUnscaledHungerEffect = true;
+            flags |= 2;
+        }
+        return flags;
+    }
+
+    public static void endPeriodicEffectTick(int flags) {
+        if ((flags & 1) != 0) {
+            suppressAffinityVitalsCascade = false;
+        }
+        if ((flags & 2) != 0) {
+            applyingUnscaledHungerEffect = false;
+        }
+    }
+
+    public static double getInfestedChanceScale(LivingEntity entity) {
+        if (OIMRConfig.isFullAffinity() || !(entity instanceof ServerPlayer player) || !isAttached(player)) {
+            return 1.0D;
+        }
+        HiveMind hive = getHiveForPlayer(player);
+        return hive != null ? hive.getInfestedChanceScale(player.getUUID()) : 1.0D;
     }
 
     public static float scaleFoodExhaustion(ServerPlayer player, float rawAmount) {
@@ -1041,6 +1519,9 @@ public final class HiveMindManager {
             return rawAmount;
         }
         float weight = OIMRConfig.getHungerWeight();
+        if (applyingUnscaledHungerEffect) {
+            return weight * rawAmount;
+        }
         int denominator = getHungerScaleDenominator(server, hiveId);
         return (weight * rawAmount) / (float) denominator;
     }
@@ -1065,7 +1546,7 @@ public final class HiveMindManager {
     }
 
     public static void onHealthChanged(LivingEntity entity) {
-        if (syncingHealth || cascadingDeath || !(entity instanceof ServerPlayer player) || !isAttached(player)) {
+        if (syncingHealth || syncingAffinityDamage || cascadingDeath || !OIMRConfig.isFullAffinity() || !(entity instanceof ServerPlayer player) || !isAttached(player)) {
             return;
         }
         float newHealth = player.getHealth();
@@ -1100,7 +1581,7 @@ public final class HiveMindManager {
     }
 
     public static void onAbsorptionChanged(LivingEntity entity) {
-        if (syncingHealth || cascadingDeath || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
+        if (syncingHealth || syncingAffinityDamage || cascadingDeath || !OIMRConfig.isFullAffinity() || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
             return;
         }
         MinecraftServer server = player.level().getServer();
@@ -1134,8 +1615,83 @@ public final class HiveMindManager {
         }
     }
 
+    public static void onPlayerHealed(LivingEntity entity, float healedAmount) {
+        if (syncingHealth
+            || syncingAffinityDamage
+            || suppressAffinityVitalsCascade
+            || cascadingDeath
+            || OIMRConfig.isFullAffinity()
+            || healedAmount <= 0.0F
+            || !(entity instanceof ServerPlayer source)
+            || !isAttached(source)
+            || source.isDeadOrDying()) {
+            return;
+        }
+        double factor = OIMRConfig.getAffinityFactorDouble();
+        if (factor <= 0.0D) {
+            return;
+        }
+        double sharedHeal = (double) healedAmount * factor;
+        if (sharedHeal <= 0.0D) {
+            return;
+        }
+        MinecraftServer server = source.level().getServer();
+        if (server == null) {
+            return;
+        }
+        String hiveId = PLAYER_HIVES.get(source.getUUID());
+        if (hiveId == null) {
+            return;
+        }
+        HiveMind hive = HiveMindData.get(server).getIfPresent(hiveId);
+        if (hive == null) {
+            return;
+        }
+
+        boolean dirty = false;
+        syncingHealth = true;
+        try {
+            for (ServerPlayer other : getAliveMembers(server, hiveId)) {
+                if (other == source || other.isCreative() || other.isSpectator() || other.getAbilities().invulnerable) {
+                    continue;
+                }
+                double missingHealth = Math.max(0.0D, other.getMaxHealth() - other.getHealth());
+                if (missingHealth <= 0.0D) {
+                    if (hive.getHealRemainder(other.getUUID()) > 0.0D) {
+                        hive.setHealRemainder(other.getUUID(), 0.0D);
+                        dirty = true;
+                    }
+                    continue;
+                }
+                double totalHeal = hive.getHealRemainder(other.getUUID()) + sharedHeal;
+                if (totalHeal + FRACTIONAL_EPSILON < 1.0D && totalHeal + FRACTIONAL_EPSILON < missingHealth) {
+                    hive.setHealRemainder(other.getUUID(), totalHeal);
+                    dirty = true;
+                    continue;
+                }
+                float appliedHeal = (float) (totalHeal < 1.0D && totalHeal + FRACTIONAL_EPSILON >= 1.0D ? 1.0D : totalHeal);
+                hive.setHealRemainder(other.getUUID(), 0.0D);
+                dirty = true;
+                float nextHealth = Math.min(other.getMaxHealth(), other.getHealth() + appliedHeal);
+                if (nextHealth > other.getHealth()) {
+                    other.setHealth(nextHealth);
+                }
+            }
+        } finally {
+            syncingHealth = false;
+        }
+        if (dirty) {
+            HiveMindData.get(server).setDirty();
+        }
+    }
+
     public static void onAfterDamage(LivingEntity entity, DamageSource source, float baseDamageTaken, float damageTaken, boolean blocked) {
-        if (cascadingDeath || !(entity instanceof ServerPlayer victim) || !isAttached(victim)) {
+        if (cascadingDeath
+            || syncingAffinityDamage
+            || suppressAffinityVitalsCascade
+            || !OIMRConfig.isFullAffinity()
+            || !(entity instanceof ServerPlayer victim)
+            || !isAttached(victim)) {
             return;
         }
         if (damageTaken <= 0.0F || victim.isDeadOrDying()) {
@@ -1147,6 +1703,10 @@ public final class HiveMindManager {
             return;
         }
         String hiveId = PLAYER_HIVES.get(victim.getUUID());
+        if (hiveId == null) {
+            return;
+        }
+
         for (ServerPlayer other : getAliveMembers(server, hiveId)) {
             if (other == victim || other.isSpectator() || other.isCreative()) {
                 continue;
@@ -1167,6 +1727,113 @@ public final class HiveMindManager {
                 1.0F,
                 1.0F
             );
+        }
+    }
+
+    public static void onPlayerActuallyHurt(ServerPlayer victim, DamageSource source, float damageTaken) {
+        if (cascadingDeath
+            || syncingAffinityDamage
+            || suppressAffinityVitalsCascade
+            || OIMRConfig.isFullAffinity()
+            || damageTaken <= 0.0F
+            || !isAttached(victim)) {
+            return;
+        }
+        if (source.is(DamageTypes.GENERIC_KILL) && damageTaken >= 10000.0F) {
+            return;
+        }
+        double factor = OIMRConfig.getAffinityFactorDouble();
+        if (factor <= 0.0D) {
+            return;
+        }
+        double sharedDamage = (double) damageTaken * factor;
+        if (sharedDamage <= 0.0D) {
+            return;
+        }
+
+        MinecraftServer server = victim.level().getServer();
+        if (server == null) {
+            return;
+        }
+        String hiveId = PLAYER_HIVES.get(victim.getUUID());
+        if (hiveId == null) {
+            return;
+        }
+        HiveMind hive = HiveMindData.get(server).getIfPresent(hiveId);
+        if (hive == null) {
+            return;
+        }
+
+        boolean dirty = false;
+        syncingAffinityDamage = true;
+        try {
+            for (ServerPlayer other : getAliveMembers(server, hiveId)) {
+                if (other == victim || other.isSpectator() || other.isCreative() || other.getAbilities().invulnerable) {
+                    continue;
+                }
+                double totalDamage = hive.getDamageRemainder(other.getUUID()) + sharedDamage;
+                recordPendingDamageSource(other.getUUID(), source, sharedDamage);
+                double effectiveHp = other.getHealth() + other.getAbsorptionAmount();
+                if (totalDamage + FRACTIONAL_EPSILON < 1.0D && totalDamage + FRACTIONAL_EPSILON < effectiveHp) {
+                    hive.setDamageRemainder(other.getUUID(), totalDamage);
+                    dirty = true;
+                    continue;
+                }
+
+                float appliedDamage = (float) (totalDamage < 1.0D && totalDamage + FRACTIONAL_EPSILON >= 1.0D ? 1.0D : totalDamage);
+                hive.setDamageRemainder(other.getUUID(), 0.0D);
+                dirty = true;
+                DamageSource resolvedSource = resolvePendingDamageSource(other.getUUID(), source);
+
+                if (other.isSleeping()) {
+                    other.stopSleeping();
+                }
+                other.hurtDuration = 10;
+                other.hurtTime = 10;
+                other.level().broadcastDamageEvent(other, resolvedSource);
+                other.level().playSound(
+                    null,
+                    other.getX(),
+                    other.getY(),
+                    other.getZ(),
+                    resolvedSource.type().effects().sound(),
+                    other.getSoundSource(),
+                    1.0F,
+                    1.0F
+                );
+
+                float absorption = other.getAbsorptionAmount();
+                float absorbed = Math.min(absorption, appliedDamage);
+                if (absorbed > 0.0F) {
+                    other.setAbsorptionAmount(absorption - absorbed);
+                }
+                float remainingDamage = appliedDamage - absorbed;
+                if (remainingDamage > 0.0F) {
+                    float nextHealth = Math.max(0.0F, other.getHealth() - remainingDamage);
+                    if (nextHealth <= 0.0F) {
+                        if (((HiveLivingEntityAccess) other).oimr$checkTotemDeathProtection(resolvedSource)) {
+                            hive.clearPlayerVitalRemainders(other.getUUID());
+                            continue;
+                        }
+                        hive.clearPlayerRemainders(other.getUUID());
+                        Component deathMsg = buildAffinityDeathMessage(other, victim, resolvedSource);
+                        PENDING_DEATH_MESSAGES.put(other.getUUID(), deathMsg);
+                        try {
+                            other.setHealth(0.0F);
+                            other.die(resolvedSource);
+                        } finally {
+                            PENDING_DEATH_MESSAGES.remove(other.getUUID());
+                        }
+                    } else {
+                        other.setHealth(nextHealth);
+                    }
+                }
+            }
+        } finally {
+            syncingAffinityDamage = false;
+        }
+        if (dirty) {
+            HiveMindData.get(server).setDirty();
         }
     }
 
@@ -1209,6 +1876,12 @@ public final class HiveMindManager {
             attacker = sourcePlayer;
         }
 
+        float factor = OIMRConfig.getAffinityFactor();
+        if (factor <= 0.0F) {
+            return;
+        }
+        double scaledPower = rawPower * factor;
+
         syncingKnockback = true;
         try {
             for (ServerPlayer other : getAliveMembers(server, hiveId)) {
@@ -1216,9 +1889,9 @@ public final class HiveMindManager {
                     continue;
                 }
                 if (other == attacker) {
-                    other.knockback(rawPower, -appliedXd, -appliedZd, source, damage, comesFromEffect);
+                    other.knockback(scaledPower, -appliedXd, -appliedZd, source, damage, comesFromEffect);
                 } else {
-                    other.knockback(rawPower, appliedXd, appliedZd, source, damage, comesFromEffect);
+                    other.knockback(scaledPower, appliedXd, appliedZd, source, damage, comesFromEffect);
                 }
                 other.syncVelocity = true;
             }
@@ -1254,10 +1927,15 @@ public final class HiveMindManager {
             return;
         }
 
+        float factor = OIMRConfig.getAffinityFactor();
+        if (factor <= 0.0F) {
+            return;
+        }
+
         syncingKnockback = true;
         try {
             for (Map.Entry<String, Vec3> entry : hiveKnockbacks.entrySet()) {
-                Vec3 knockback = entry.getValue();
+                Vec3 knockback = entry.getValue().scale(factor);
                 for (ServerPlayer other : getAliveMembers(server, entry.getKey())) {
                     if (hitPlayers.containsKey(other) || other.isSpectator() || other.isCreative()) {
                         continue;
@@ -1269,6 +1947,64 @@ public final class HiveMindManager {
         } finally {
             syncingKnockback = false;
         }
+    }
+
+    public static int scaleExperiencePoints(ServerPlayer player, int rawPoints) {
+        if (syncingExperience || rawPoints <= 0 || !isAttached(player)) {
+            return rawPoints;
+        }
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return rawPoints;
+        }
+        String hiveId = PLAYER_HIVES.get(player.getUUID());
+        if (hiveId == null) {
+            return rawPoints;
+        }
+        HiveMind hive = HiveMindData.get(server).getIfPresent(hiveId);
+        if (hive == null) {
+            return rawPoints;
+        }
+        float weight = OIMRConfig.getXpWeight();
+        int denominator = getHungerScaleDenominator(server, hiveId);
+        if (hive.getXpRemainder() <= 0.0D && Float.compare(weight, 1.0F) == 0 && denominator == 1) {
+            return rawPoints;
+        }
+        double scaled = ((double) weight * (double) rawPoints) / (double) denominator;
+        double total = hive.getXpRemainder() + scaled;
+        int whole = Mth.floor(total + FRACTIONAL_EPSILON);
+        hive.setXpRemainder(Math.max(0.0D, total - whole));
+        HiveMindData.get(server).setDirty();
+        return whole;
+    }
+
+    public static int scaleExperienceLevels(ServerPlayer player, int rawLevels) {
+        if (syncingExperience || rawLevels <= 0 || !isAttached(player)) {
+            return rawLevels;
+        }
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return rawLevels;
+        }
+        String hiveId = PLAYER_HIVES.get(player.getUUID());
+        if (hiveId == null) {
+            return rawLevels;
+        }
+        HiveMind hive = HiveMindData.get(server).getIfPresent(hiveId);
+        if (hive == null) {
+            return rawLevels;
+        }
+        float weight = OIMRConfig.getXpWeight();
+        int denominator = getHungerScaleDenominator(server, hiveId);
+        if (hive.getXpLevelRemainder() <= 0.0D && Float.compare(weight, 1.0F) == 0 && denominator == 1) {
+            return rawLevels;
+        }
+        double scaled = ((double) weight * (double) rawLevels) / (double) denominator;
+        double total = hive.getXpLevelRemainder() + scaled;
+        int whole = Mth.floor(total + FRACTIONAL_EPSILON);
+        hive.setXpLevelRemainder(Math.max(0.0D, total - whole));
+        HiveMindData.get(server).setDirty();
+        return whole;
     }
 
     public static void onExperienceChanged(ServerPlayer source) {
@@ -1691,12 +2427,14 @@ public final class HiveMindManager {
         }
 
         List<Component> names = new ArrayList<>();
-        for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
-            if (member == victim
-                || (!member.isDeadOrDying()
-                    && !member.isSpectator()
-                    && !(member.isCreative() && OIMRConfig.isExcludeCreativeFromDeathEnabled()))) {
-                names.add(member.getDisplayName());
+        if (OIMRConfig.isFullAffinity()) {
+            for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
+                if (member == victim
+                    || (!member.isDeadOrDying()
+                        && !member.isSpectator()
+                        && !(member.isCreative() && OIMRConfig.isExcludeCreativeFromDeathEnabled()))) {
+                    names.add(member.getDisplayName());
+                }
             }
         }
         if (names.isEmpty()) {
@@ -1708,17 +2446,17 @@ public final class HiveMindManager {
         Component result;
         if (names.size() == 1) {
             result = secondaryName != null
-                ? Component.translatable(prefix + "solo.player", names.get(0), secondaryName)
-                : Component.translatable(prefix + "solo", names.get(0));
+                ? OIMRLang.translatable(prefix + "solo.player", names.get(0), secondaryName)
+                : OIMRLang.translatable(prefix + "solo", names.get(0));
         } else {
             Component joined = formatPlayerNameList(names);
             result = secondaryName != null
-                ? Component.translatable(prefix + "group.player", joined, secondaryName)
-                : Component.translatable(prefix + "group", joined);
+                ? OIMRLang.translatable(prefix + "group.player", joined, secondaryName)
+                : OIMRLang.translatable(prefix + "group", joined);
         }
 
         LAST_HIVE_DEATH_MESSAGES.put(victim.getUUID(), result);
-        CAPTURED_DEATH_CONTEXTS.put(victim.getUUID(), new CapturedDeathContext(result, secondary, true));
+        CAPTURED_DEATH_CONTEXTS.put(victim.getUUID(), new CapturedDeathContext(result, secondary, OIMRConfig.isFullAffinity()));
         return result;
     }
 
@@ -1727,13 +2465,23 @@ public final class HiveMindManager {
             return names.get(0);
         }
         if (names.size() == 2) {
-            return Component.translatable("death.oimr.list.two", names.get(0), names.get(1));
+            return OIMRLang.translatable("death.oimr.list.two", names.get(0), names.get(1));
         }
         Component acc = names.get(0);
         for (int i = 1; i < names.size() - 1; i++) {
-            acc = Component.translatable("death.oimr.list.sep", acc, names.get(i));
+            acc = OIMRLang.translatable("death.oimr.list.sep", acc, names.get(i));
         }
-        return Component.translatable("death.oimr.list.end", acc, names.get(names.size() - 1));
+        return OIMRLang.translatable("death.oimr.list.end", acc, names.get(names.size() - 1));
+    }
+
+    private static Component buildAffinityDeathMessage(ServerPlayer other, ServerPlayer victim, DamageSource source) {
+        Component otherName = other.getDisplayName();
+        Component victimName = victim.getDisplayName();
+        Entity attacker = source.getEntity();
+        if (attacker != null && attacker != victim && attacker != other) {
+            return OIMRLang.translatable("death.oimr.affinity.player", otherName, victimName, attacker.getDisplayName());
+        }
+        return OIMRLang.translatable("death.oimr.affinity", otherName, victimName);
     }
 
     public static void captureOriginalDeathContext(LivingEntity entity, Component deathMessage, @Nullable Entity secondaryEntity) {
@@ -1787,14 +2535,14 @@ public final class HiveMindManager {
             if (other == teammateAttacker) {
                 if (directTeammateAttack) {
                     return hasCustomWeapon
-                        ? Component.translatable("death.oimr.friendly_fire.self.item", otherName, victimName, weapon.getDisplayName())
-                        : Component.translatable("death.oimr.friendly_fire.self", otherName, victimName);
+                        ? OIMRLang.translatable("death.oimr.friendly_fire.self.item", otherName, victimName, weapon.getDisplayName())
+                        : OIMRLang.translatable("death.oimr.friendly_fire.self", otherName, victimName);
                 }
-                return Component.translatable("death.oimr.friendly_fire.self_indirect", otherName, victimName);
+                return OIMRLang.translatable("death.oimr.friendly_fire.self_indirect", otherName, victimName);
             }
             return hasCustomWeapon
-                ? Component.translatable("death.oimr.friendly_fire.other.item", otherName, teammateAttacker.getDisplayName(), victimName, weapon.getDisplayName())
-                : Component.translatable("death.oimr.friendly_fire.other", otherName, teammateAttacker.getDisplayName(), victimName);
+                ? OIMRLang.translatable("death.oimr.friendly_fire.other.item", otherName, teammateAttacker.getDisplayName(), victimName, weapon.getDisplayName())
+                : OIMRLang.translatable("death.oimr.friendly_fire.other", otherName, teammateAttacker.getDisplayName(), victimName);
         }
 
         Component secondaryName = (secondary != null && secondary != victim && secondary != other)
@@ -1808,20 +2556,20 @@ public final class HiveMindManager {
             String prefix = OIMRConfig.isComunismEnabled() ? "death.oimr.comunism." : "death.oimr.starve.";
             Component joined = formatPlayerNameList(List.of(otherName, victimName));
             return secondaryName != null
-                ? Component.translatable(prefix + "group.player", joined, secondaryName)
-                : Component.translatable(prefix + "group", joined);
+                ? OIMRLang.translatable(prefix + "group.player", joined, secondaryName)
+                : OIMRLang.translatable(prefix + "group", joined);
         }
 
         ResourceKey<DamageType> damageTypeKey = source.typeHolder().unwrapKey().orElse(null);
         String mappedKey = damageTypeKey != null ? SIMPLE_DEATH_MESSAGE_KEYS.get(damageTypeKey) : null;
         if (mappedKey != null) {
             return secondaryName != null
-                ? Component.translatable(mappedKey + ".player", otherName, victimName, secondaryName)
-                : Component.translatable(mappedKey, otherName, victimName);
+                ? OIMRLang.translatable(mappedKey + ".player", otherName, victimName, secondaryName)
+                : OIMRLang.translatable(mappedKey, otherName, victimName);
         }
 
         Component victimMessage = captured != null ? captured.deathMessage() : source.getLocalizedDeathMessage(victim);
-        return Component.translatable("death.oimr.cascade", otherName, victimMessage);
+        return OIMRLang.translatable("death.oimr.cascade", otherName, victimMessage);
     }
 
     public static void onPlayerDeath(LivingEntity entity, DamageSource source) {
@@ -1837,6 +2585,39 @@ public final class HiveMindManager {
         boolean preserveForCreative = !keepInventory && shouldSuppressDeathInventoryDrop(victim);
         String hiveId = PLAYER_HIVES.get(victim.getUUID());
         HiveMind hive = HiveMindData.get(server).getIfPresent(hiveId);
+
+        if (!OIMRConfig.isFullAffinity()) {
+            PENDING_DAMAGE_SOURCES.remove(victim.getUUID());
+            if (hive != null) {
+                hive.clearPlayerRemainders(victim.getUUID());
+                if (!keepInventory && !preserveForCreative) {
+                    hive.resetExperience();
+                }
+            }
+            if (hive != null && !keepInventory && !preserveForCreative) {
+                syncingExperience = true;
+                try {
+                    for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
+                        if (member == victim || member.isDeadOrDying()) {
+                            continue;
+                        }
+                        member.experienceLevel = 0;
+                        member.totalExperience = 0;
+                        member.experienceProgress = 0.0F;
+                        member.connection.send(new ClientboundSetExperiencePacket(0.0F, 0, 0));
+                        member.inventoryMenu.sendAllDataToRemote();
+                        ((HiveLivingEntityAccess) member).oimr$detectEquipmentUpdates();
+                    }
+                } finally {
+                    syncingExperience = false;
+                }
+            } else {
+                broadcastInventoryChanges(victim);
+            }
+            HiveMindData.get(server).setDirty();
+            return;
+        }
+
         if (hive != null) {
             hive.setHealth(0.0F);
             hive.setAbsorption(0.0F);
@@ -1895,23 +2676,191 @@ public final class HiveMindManager {
         }
     }
 
+    public static void onTotemActivated(LivingEntity entity) {
+        if (handlingGroupTotem || !(entity instanceof ServerPlayer player) || !isAttached(player)) {
+            return;
+        }
+        broadcastInventoryChanges(player);
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return;
+        }
+        String hiveId = PLAYER_HIVES.get(player.getUUID());
+        if (hiveId == null) {
+            return;
+        }
+        if (!OIMRConfig.isFullAffinity()) {
+            PENDING_DAMAGE_SOURCES.remove(player.getUUID());
+            HiveMind hive = HiveMindData.get(server).getIfPresent(hiveId);
+            if (hive != null) {
+                hive.clearPlayerVitalRemainders(player.getUUID());
+                HiveMindData.get(server).setDirty();
+            }
+            return;
+        }
+        for (ServerPlayer member : getAliveMembers(server, hiveId)) {
+            if (member != player && !member.isSpectator()) {
+                member.level().broadcastEntityEvent(member, (byte) 35);
+            }
+        }
+    }
+
+    public static boolean tryActivateGroupTotem(LivingEntity entity, DamageSource source) {
+        if (handlingGroupTotem
+            || !OIMRConfig.isFullAffinity()
+            || source.is(DamageTypeTags.BYPASSES_INVULNERABILITY)
+            || !(entity instanceof ServerPlayer victim)
+            || !isAttached(victim)) {
+            return false;
+        }
+        MinecraftServer server = victim.level().getServer();
+        if (server == null) {
+            return false;
+        }
+        String hiveId = PLAYER_HIVES.get(victim.getUUID());
+        if (hiveId == null) {
+            return false;
+        }
+
+        List<ServerPlayer> aliveMembers = getAliveMembers(server, hiveId);
+        ServerPlayer totemHolder = null;
+        ItemStack totemStack = ItemStack.EMPTY;
+        DeathProtection protection = null;
+
+        for (ServerPlayer candidate : aliveMembers) {
+            if (candidate == victim || candidate.isSpectator()) {
+                continue;
+            }
+            if (candidate.isCreative() && OIMRConfig.isExcludeCreativeFromDeathEnabled()) {
+                continue;
+            }
+            for (InteractionHand hand : InteractionHand.values()) {
+                ItemStack stack = candidate.getItemInHand(hand);
+                DeathProtection candidateProtection = stack.get(DataComponents.DEATH_PROTECTION);
+                if (candidateProtection != null) {
+                    totemHolder = candidate;
+                    totemStack = stack;
+                    protection = candidateProtection;
+                    break;
+                }
+            }
+            if (protection != null) {
+                break;
+            }
+        }
+        if (protection == null || totemHolder == null) {
+            return false;
+        }
+
+        ItemStack totemCopy = totemStack.copy();
+        totemStack.shrink(1);
+        totemHolder.awardStat(Stats.ITEM_USED.get(totemCopy.getItem()));
+        CriteriaTriggers.USED_TOTEM.trigger(totemHolder, totemCopy);
+        totemCopy.causeUseVibration(totemHolder, GameEvent.ITEM_INTERACT_FINISH);
+
+        handlingGroupTotem = true;
+        try {
+            victim.setHealth(1.0F);
+            protection.applyEffects(totemCopy, victim);
+            for (ServerPlayer member : aliveMembers) {
+                if (!member.isSpectator()) {
+                    member.level().broadcastEntityEvent(member, (byte) 35);
+                }
+            }
+            broadcastInventoryChanges(victim);
+        } finally {
+            handlingGroupTotem = false;
+        }
+        return true;
+    }
+
+    private static void recordPendingDamageSource(UUID recipientUuid, DamageSource source, double amount) {
+        if (amount <= 0.0D) {
+            return;
+        }
+        List<PendingDamageContribution> list = PENDING_DAMAGE_SOURCES.computeIfAbsent(recipientUuid, ignored -> new ArrayList<>());
+        for (int i = 0; i < list.size(); i++) {
+            PendingDamageContribution entry = list.get(i);
+            if (sameDamageOrigin(entry.source(), source)) {
+                list.set(i, new PendingDamageContribution(source, entry.amount() + amount));
+                return;
+            }
+        }
+        list.add(new PendingDamageContribution(source, amount));
+    }
+
+    private static boolean sameDamageOrigin(DamageSource a, DamageSource b) {
+        return Objects.equals(a.typeHolder(), b.typeHolder())
+            && a.getEntity() == b.getEntity()
+            && a.getDirectEntity() == b.getDirectEntity();
+    }
+
+    private static DamageSource resolvePendingDamageSource(UUID recipientUuid, DamageSource fallback) {
+        List<PendingDamageContribution> list = PENDING_DAMAGE_SOURCES.remove(recipientUuid);
+        if (list == null || list.isEmpty()) {
+            return fallback;
+        }
+        PendingDamageContribution best = list.getLast();
+        for (PendingDamageContribution entry : list) {
+            if (entry.amount() > best.amount() + FRACTIONAL_EPSILON) {
+                best = entry;
+            } else if (Math.abs(entry.amount() - best.amount()) <= FRACTIONAL_EPSILON
+                && entry.source().getEntity() != null
+                && best.source().getEntity() == null) {
+                best = entry;
+            }
+        }
+        return best.source();
+    }
+
+    private record PendingDamageContribution(DamageSource source, double amount) {
+    }
+
     private record CapturedDeathContext(Component deathMessage, @Nullable Entity secondaryEntity, boolean collectiveStarve) {
     }
 
     private record SplashEffectKey(String hiveId, Holder<MobEffect> effect) {
     }
 
+    private record InstantaneousEffectKey(String hiveId, MobEffect effect) {
+    }
+
+    private static final class InstantaneousImpactEntry {
+        private final MobEffect effect;
+        private ServerPlayer target;
+        private int amplifier;
+        private double healthFactor;
+
+        private InstantaneousImpactEntry(MobEffect effect, ServerPlayer target, int amplifier, double healthFactor) {
+            this.effect = effect;
+            this.target = target;
+            this.amplifier = amplifier;
+            this.healthFactor = healthFactor;
+        }
+
+        private void update(ServerPlayer candidateTarget, int candidateAmplifier, double candidateHealthFactor) {
+            if (candidateAmplifier > this.amplifier
+                || (candidateAmplifier == this.amplifier && candidateHealthFactor > this.healthFactor)) {
+                this.target = candidateTarget;
+                this.amplifier = candidateAmplifier;
+                this.healthFactor = candidateHealthFactor;
+            }
+        }
+    }
+
     private static final class SplashImpactAccumulator {
         private final String hiveId;
         private final Holder<MobEffect> effect;
+        private final boolean stackDurations;
         private int totalDuration;
         private int amplifier;
         private boolean ambient;
         private boolean visible;
 
-        private SplashImpactAccumulator(String hiveId, MobEffectInstance first) {
+        private SplashImpactAccumulator(String hiveId, MobEffectInstance first, boolean stackDurations) {
             this.hiveId = hiveId;
             this.effect = first.getEffect();
+            this.stackDurations = stackDurations;
             this.totalDuration = first.getDuration();
             this.amplifier = first.getAmplifier();
             this.ambient = first.isAmbient();
@@ -1919,7 +2868,11 @@ public final class HiveMindManager {
         }
 
         private void add(MobEffectInstance hitEffect) {
-            this.totalDuration += hitEffect.getDuration();
+            if (this.stackDurations) {
+                this.totalDuration += hitEffect.getDuration();
+            } else if (hitEffect.getDuration() > this.totalDuration) {
+                this.totalDuration = hitEffect.getDuration();
+            }
             if (hitEffect.getAmplifier() > this.amplifier) {
                 this.amplifier = hitEffect.getAmplifier();
             }
@@ -1929,20 +2882,42 @@ public final class HiveMindManager {
     }
 
     private static final class SplashImpactState {
+        private final boolean stackDurations;
         private final Map<SplashEffectKey, SplashImpactAccumulator> entries = new LinkedHashMap<>();
+        private final Map<InstantaneousEffectKey, InstantaneousImpactEntry> instantEntries = new LinkedHashMap<>();
+
+        private SplashImpactState(boolean stackDurations) {
+            this.stackDurations = stackDurations;
+        }
 
         private void record(String hiveId, MobEffectInstance hitEffect) {
             SplashEffectKey key = new SplashEffectKey(hiveId, hitEffect.getEffect());
             SplashImpactAccumulator existing = this.entries.get(key);
             if (existing == null) {
-                this.entries.put(key, new SplashImpactAccumulator(hiveId, hitEffect));
+                this.entries.put(key, new SplashImpactAccumulator(hiveId, hitEffect, this.stackDurations));
             } else {
                 existing.add(hitEffect);
             }
         }
 
+        private void recordInstantaneous(
+            String hiveId,
+            MobEffect effect,
+            ServerPlayer target,
+            int amplifier,
+            double healthFactor
+        ) {
+            InstantaneousEffectKey key = new InstantaneousEffectKey(hiveId, effect);
+            InstantaneousImpactEntry existing = this.instantEntries.get(key);
+            if (existing == null) {
+                this.instantEntries.put(key, new InstantaneousImpactEntry(effect, target, amplifier, healthFactor));
+            } else {
+                existing.update(target, amplifier, healthFactor);
+            }
+        }
+
         private boolean isEmpty() {
-            return this.entries.isEmpty();
+            return this.entries.isEmpty() && this.instantEntries.isEmpty();
         }
     }
 }

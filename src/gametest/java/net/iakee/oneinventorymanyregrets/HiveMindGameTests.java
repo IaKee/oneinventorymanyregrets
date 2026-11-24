@@ -8,14 +8,20 @@ import net.iakee.oneinventorymanyregrets.command.OIMRCommand;
 import net.iakee.oneinventorymanyregrets.config.OIMRConfig;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveFoodDataFieldsAccess;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveFoxAccess;
+import net.iakee.oneinventorymanyregrets.hivemind.HiveLivingEntityAccess;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMind;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindData;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindManager;
+import net.iakee.oneinventorymanyregrets.network.OIMRBondSyncPayload;
+import io.netty.buffer.Unpooled;
+import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.advancements.AdvancementProgress;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.Holder;
 import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
@@ -36,6 +42,7 @@ import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
+import net.minecraft.world.entity.AreaEffectCloud;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityTypes;
@@ -59,6 +66,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.item.alchemy.PotionContents;
 import net.minecraft.world.item.consume_effects.ClearAllStatusEffectsConsumeEffect;
 import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.item.trading.ItemCost;
 import net.minecraft.world.item.trading.MerchantOffer;
 import net.minecraft.world.item.trading.MerchantOffers;
@@ -279,6 +287,16 @@ public class HiveMindGameTests {
         hive.getFoodData().setSaturation(3.5F);
         ((HiveFoodDataFieldsAccess) hive.getFoodData()).oimr$setExhaustionLevel(1.25F);
         hive.setExperience(18, 420, 0.75F);
+        hive.setXpRemainder(0.375D);
+        hive.setXpLevelRemainder(0.625D);
+        UUID remPlayer = UUID.fromString("11111111-2222-3333-4444-555555555555");
+        hive.setDamageRemainder(remPlayer, 0.45D);
+        hive.setHealRemainder(remPlayer, 0.25D);
+        hive.setAbsorptionRemainder(remPlayer, 0.35D);
+        hive.setHealthBoostRemainder(remPlayer, 0.75D);
+        hive.setInfestedChanceScale(remPlayer, 0.5D);
+        hive.setEffectDurationRemainder(remPlayer, MobEffects.SPEED, 0.8D);
+        hive.setEffectTriggerRemainder(remPlayer, MobEffects.BAD_OMEN, 0.5D);
         hive.setEnchantmentSeed(9876543);
         hive.setAirSupply(180);
         hive.setRemainingFireTicks(90);
@@ -322,6 +340,17 @@ public class HiveMindGameTests {
             "Restored environment state mismatch");
         helper.assertTrue(restored.getExperienceLevel() == 18 && restored.getTotalExperience() == 420
             && Math.abs(restored.getExperienceProgress() - 0.75F) < 0.001F, "Restored XP mismatch");
+        helper.assertTrue(Math.abs(restored.getXpRemainder() - 0.375D) < 1.0E-6D
+            && Math.abs(restored.getXpLevelRemainder() - 0.625D) < 1.0E-6D,
+            "Restored XP remainders mismatch");
+        helper.assertTrue(Math.abs(restored.getDamageRemainder(remPlayer) - 0.45D) < 1.0E-6D
+            && Math.abs(restored.getHealRemainder(remPlayer) - 0.25D) < 1.0E-6D
+            && Math.abs(restored.getAbsorptionRemainder(remPlayer) - 0.35D) < 1.0E-6D
+            && Math.abs(restored.getHealthBoostRemainder(remPlayer) - 0.75D) < 1.0E-6D
+            && Math.abs(restored.getInfestedChanceScale(remPlayer) - 0.5D) < 1.0E-6D
+            && Math.abs(restored.getEffectDurationRemainder(remPlayer, MobEffects.SPEED) - 0.8D) < 1.0E-6D
+            && Math.abs(restored.getEffectTriggerRemainder(remPlayer, MobEffects.BAD_OMEN) - 0.5D) < 1.0E-6D,
+            "Restored per-player remainders mismatch");
         helper.assertTrue(restored.getEnchantmentSeed() == 9876543, "Restored enchantment seed mismatch");
         helper.assertTrue(restored.getRespawnConfig() != null
             && restored.getRespawnConfig().respawnData().pos().equals(new BlockPos(10, 64, -20)),
@@ -395,7 +424,7 @@ public class HiveMindGameTests {
         ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob7");
         try {
             // Shared XP & levels (gain, anvil/level spend, enchantment spend)
-            alice.giveExperienceLevels(10);
+            alice.setExperienceLevels(10);
             helper.assertTrue(bob.experienceLevel == 10, "Bob should share level 10 from Alice");
 
             bob.giveExperiencePoints(15);
@@ -1298,7 +1327,7 @@ public class HiveMindGameTests {
             alice.setPos(tablePos.getX() + 0.5, tablePos.getY() + 1.0, tablePos.getZ() + 0.5);
             bob.setPos(tablePos.getX() + 0.5, tablePos.getY() + 1.0, tablePos.getZ() + 0.5);
 
-            alice.giveExperienceLevels(30);
+            alice.setExperienceLevels(30);
             helper.assertTrue(bob.experienceLevel == 30, "Bob must start at shared level 30");
 
             alice.openMenu(level.getBlockState(tablePos).getMenuProvider(level, tablePos));
@@ -1390,6 +1419,895 @@ public class HiveMindGameTests {
         } finally {
             OIMRConfig.setExcludeCreativeFromDeath(prevExclude);
             OIMRConfig.setWipeCreativeInventoryOnDeath(prevWipe);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testDeathMessageFallbacksAndLocalization(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice24");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob24");
+        try {
+            bob.hurtServer(level, level.damageSources().fall(), 50.0F);
+            Component aliceDeath = HiveMindManager.getLastHiveDeathMessage(alice.getUUID());
+            helper.assertTrue(aliceDeath != null
+                && aliceDeath.getContents() instanceof TranslatableContents tc
+                && "death.oimr.fall".equals(tc.getKey())
+                && tc.getFallback() != null
+                && !tc.getFallback().isEmpty(),
+                "Death message must carry non-empty fallback for vanilla clients (got " + aliceDeath + ")");
+
+            alice.updateOptions(new ClientInformation("pt_br", 8, net.minecraft.world.entity.player.ChatVisiblity.FULL, true, 0,
+                net.minecraft.world.entity.HumanoidArm.RIGHT, false, true, net.minecraft.server.level.ParticleStatus.ALL));
+            Component ptLocalized = net.iakee.oneinventorymanyregrets.hivemind.OIMRLang.localizeForPlayer(aliceDeath, alice);
+            helper.assertTrue(ptLocalized.getContents() instanceof TranslatableContents ptTc
+                && ptTc.getFallback() != null
+                && ptTc.getFallback().contains("caiu de um lugar alto"),
+                "pt_br client must receive Portuguese fallback (got " + ptLocalized + ")");
+
+            bob.updateOptions(new ClientInformation("en_us", 8, net.minecraft.world.entity.player.ChatVisiblity.FULL, true, 0,
+                net.minecraft.world.entity.HumanoidArm.RIGHT, false, true, net.minecraft.server.level.ParticleStatus.ALL));
+            Component enLocalized = net.iakee.oneinventorymanyregrets.hivemind.OIMRLang.localizeForPlayer(aliceDeath, bob);
+            helper.assertTrue(enLocalized.getContents() instanceof TranslatableContents enTc
+                && enTc.getFallback() != null
+                && enTc.getFallback().contains("hit the ground too hard"),
+                "en_us client must receive English fallback (got " + enLocalized + ")");
+
+            helper.succeed();
+        } finally {
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testPerSlotAndHotbarSync(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        boolean prevHotbar = OIMRConfig.isSyncHotbarEnabled();
+        boolean prevMain = OIMRConfig.isSyncMainHandEnabled();
+        boolean prevOff = OIMRConfig.isSyncOffHandEnabled();
+        boolean prevHead = OIMRConfig.isSyncHelmetEnabled();
+        boolean prevChest = OIMRConfig.isSyncChestplateEnabled();
+        boolean prevLegs = OIMRConfig.isSyncLeggingsEnabled();
+        boolean prevFeet = OIMRConfig.isSyncBootsEnabled();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice25");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob25");
+        try {
+            // 1. Hotbar OFF, MainHand OFF -> hotbar 0..8 personal, main inv 9..35 shared
+            OIMRConfig.setSyncHotbar(false);
+            OIMRConfig.setSyncMainHand(false);
+            alice.getInventory().setItem(0, new ItemStack(Items.DIAMOND_SWORD));
+            bob.getInventory().setItem(0, new ItemStack(Items.IRON_PICKAXE));
+            alice.getInventory().setItem(9, new ItemStack(Items.EMERALD, 5));
+
+            helper.assertTrue(alice.getInventory().getItem(0).is(Items.DIAMOND_SWORD)
+                && bob.getInventory().getItem(0).is(Items.IRON_PICKAXE),
+                "Hotbar slot 0 must stay personal when syncHotbar and syncMainHand are OFF");
+            helper.assertTrue(bob.getInventory().getItem(9).is(Items.EMERALD)
+                && bob.getInventory().getItem(9).getCount() == 5,
+                "Main inventory slot 9 must stay shared even when hotbar sync is OFF");
+
+            // 2. Hotbar OFF, MainHand ON -> slot 0 shared, slot 1 personal
+            OIMRConfig.setSyncMainHand(true);
+            alice.getInventory().setItem(0, new ItemStack(Items.NETHERITE_SWORD));
+            alice.getInventory().setItem(1, new ItemStack(Items.TORCH, 10));
+            bob.getInventory().setItem(1, new ItemStack(Items.COOKED_BEEF, 3));
+            helper.assertTrue(bob.getInventory().getItem(0).is(Items.NETHERITE_SWORD),
+                "Hotbar slot 0 must sync when syncMainHand is ON");
+            helper.assertTrue(alice.getInventory().getItem(1).is(Items.TORCH)
+                && bob.getInventory().getItem(1).is(Items.COOKED_BEEF),
+                "Hotbar slot 1 must stay personal when syncHotbar is OFF");
+
+            // 3. Equipment slots toggled individually
+            OIMRConfig.setSyncHelmet(false);
+            OIMRConfig.setSyncChestplate(true);
+            OIMRConfig.setSyncLeggings(false);
+            OIMRConfig.setSyncBoots(true);
+            OIMRConfig.setSyncOffHand(false);
+
+            alice.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.DIAMOND_HELMET));
+            bob.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.IRON_HELMET));
+            alice.setItemSlot(EquipmentSlot.CHEST, new ItemStack(Items.DIAMOND_CHESTPLATE));
+            alice.setItemSlot(EquipmentSlot.LEGS, new ItemStack(Items.GOLDEN_LEGGINGS));
+            bob.setItemSlot(EquipmentSlot.LEGS, new ItemStack(Items.CHAINMAIL_LEGGINGS));
+            alice.setItemSlot(EquipmentSlot.FEET, new ItemStack(Items.DIAMOND_BOOTS));
+            alice.setItemSlot(EquipmentSlot.OFFHAND, new ItemStack(Items.SHIELD));
+            bob.setItemSlot(EquipmentSlot.OFFHAND, new ItemStack(Items.TOTEM_OF_UNDYING));
+
+            helper.assertTrue(alice.getItemBySlot(EquipmentSlot.HEAD).is(Items.DIAMOND_HELMET)
+                && bob.getItemBySlot(EquipmentSlot.HEAD).is(Items.IRON_HELMET),
+                "Helmet must be personal when syncHelmet is OFF");
+            helper.assertTrue(bob.getItemBySlot(EquipmentSlot.CHEST).is(Items.DIAMOND_CHESTPLATE),
+                "Chestplate must be shared when syncChestplate is ON");
+            helper.assertTrue(alice.getItemBySlot(EquipmentSlot.LEGS).is(Items.GOLDEN_LEGGINGS)
+                && bob.getItemBySlot(EquipmentSlot.LEGS).is(Items.CHAINMAIL_LEGGINGS),
+                "Leggings must be personal when syncLeggings is OFF");
+            helper.assertTrue(bob.getItemBySlot(EquipmentSlot.FEET).is(Items.DIAMOND_BOOTS),
+                "Boots must be shared when syncBoots is ON");
+            helper.assertTrue(alice.getItemBySlot(EquipmentSlot.OFFHAND).is(Items.SHIELD)
+                && bob.getItemBySlot(EquipmentSlot.OFFHAND).is(Items.TOTEM_OF_UNDYING),
+                "Offhand must be personal when syncOffHand is OFF");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setSyncHotbar(prevHotbar);
+            OIMRConfig.setSyncMainHand(prevMain);
+            OIMRConfig.setSyncOffHand(prevOff);
+            OIMRConfig.setSyncHelmet(prevHead);
+            OIMRConfig.setSyncChestplate(prevChest);
+            OIMRConfig.setSyncLeggings(prevLegs);
+            OIMRConfig.setSyncBoots(prevFeet);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testXpWeightScalingAndUnchangedSpend(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        float prevXpWeight = OIMRConfig.getXpWeight();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice26");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob26");
+        try {
+            OIMRConfig.setXpWeight(1.0F);
+            alice.setExperienceLevels(0);
+            alice.setExperiencePoints(0);
+
+            // 2 players at 1.0x weight: 1 XP twice accumulates 0.5 + 0.5 = 1 XP
+            alice.giveExperiencePoints(1);
+            helper.assertTrue(alice.totalExperience == 0,
+                "First 1-XP orb with 2 players at 1.0x should accumulate 0.5 remainder (got " + alice.totalExperience + ")");
+            bob.giveExperiencePoints(1);
+            helper.assertTrue(alice.totalExperience == 1 && bob.totalExperience == 1,
+                "Second 1-XP orb should grant 1 total XP across party (got " + alice.totalExperience + ")");
+
+            // 2.0x weight with 2 players -> (2.0 * 10) / 2 = 10 XP
+            OIMRConfig.setXpWeight(2.0F);
+            alice.giveExperiencePoints(10);
+            helper.assertTrue(alice.totalExperience == 11 && bob.totalExperience == 11,
+                "2.0x XP weight with 2 players must grant 10 XP for +10 gain (got " + alice.totalExperience + ")");
+
+            // Enchantment spending remains unchanged (1x cost) regardless of xpWeight
+            OIMRConfig.setXpWeight(0.5F);
+            alice.setExperienceLevels(10);
+            alice.onEnchantmentPerformed(new ItemStack(Items.DIAMOND_SWORD), 3);
+            helper.assertTrue(alice.experienceLevel == 7 && bob.experienceLevel == 7,
+                "Enchantment XP cost must remain 1x unaltered (expected 7, got " + alice.experienceLevel + ")");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setXpWeight(prevXpWeight);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testAffinityScalingAndDeSyncedDeaths(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice27");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob27");
+        try {
+            // 1. 50% affinity: damage, healing, effects scale; inventory stays synced; deaths de-sync
+            OIMRConfig.setAffinityPercent(50);
+            alice.setHealth(20.0F);
+            bob.setHealth(20.0F);
+
+            alice.hurtServer(level, level.damageSources().generic(), 10.0F);
+            helper.assertTrue(Math.abs(alice.getHealth() - 10.0F) < 0.05F,
+                "Alice should have 10 HP after 10 damage (got " + alice.getHealth() + ")");
+            helper.assertTrue(Math.abs(bob.getHealth() - 15.0F) < 0.05F,
+                "Bob should take 50% (5) shared damage to 15 HP (got " + bob.getHealth() + ")");
+
+            alice.heal(4.0F);
+            helper.assertTrue(Math.abs(alice.getHealth() - 14.0F) < 0.05F
+                && Math.abs(bob.getHealth() - 17.0F) < 0.05F,
+                "Bob should heal 50% (2 HP) to 17 HP (got " + bob.getHealth() + ")");
+
+            alice.addEffect(new MobEffectInstance(MobEffects.SPEED, 200, 1));
+            helper.assertTrue(bob.hasEffect(MobEffects.SPEED), "Bob must receive scaled Speed effect");
+            helper.assertTrue(bob.getEffect(MobEffects.SPEED).getAmplifier() == 1
+                && Math.abs(bob.getEffect(MobEffects.SPEED).getDuration() - 100) <= 2,
+                "Bob must receive full Speed II (amp 1) for 100 ticks at 50% affinity (got amp="
+                    + bob.getEffect(MobEffects.SPEED).getAmplifier() + ", dur=" + bob.getEffect(MobEffects.SPEED).getDuration() + ")");
+
+            // Inventory still syncs regardless of affinity
+            alice.getInventory().setItem(12, new ItemStack(Items.GOLD_INGOT, 4));
+            helper.assertTrue(bob.getInventory().getItem(12).is(Items.GOLD_INGOT)
+                && bob.getInventory().getItem(12).getCount() == 4,
+                "Synced inventory slots must be unaffected by affinity");
+
+            // Lethal hit on low-HP Bob does NOT force-kill healthy Alice (Bob has no prior hurt cooldown)
+            bob.setHealth(6.0F);
+            alice.setHealth(20.0F);
+            bob.hurtServer(level, level.damageSources().generic(), 10.0F);
+            helper.assertTrue(bob.isDeadOrDying(), "Bob must die from lethal damage");
+            helper.assertFalse(alice.isDeadOrDying(), "Alice must NOT obligatorily die when affinity < 100%");
+            helper.assertTrue(Math.abs(alice.getHealth() - 15.0F) < 0.05F,
+                "Alice should only take 50% of the lethal hit's damage (got " + alice.getHealth() + ")");
+
+            // 2. 0% affinity: zero damage/effect sharing
+            bob.connection.handleClientCommand(new ServerboundClientCommandPacket(ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
+            OIMRConfig.setAffinityPercent(0);
+            alice.setHealth(20.0F);
+            bob.setHealth(20.0F);
+            alice.removeAllEffects();
+            bob.hurtServer(level, level.damageSources().generic(), 8.0F);
+            bob.addEffect(new MobEffectInstance(MobEffects.STRENGTH, 200, 0));
+            helper.assertTrue(Math.abs(alice.getHealth() - 20.0F) < 0.01F && !alice.hasEffect(MobEffects.STRENGTH),
+                "At 0% affinity Alice must take no shared damage or effects");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testAbsorption1xAndSub100Propagation(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        boolean prevChest = OIMRConfig.isSyncChestplateEnabled();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice28");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob28");
+        try {
+            // 1. At 100% affinity, Absorption is a single 1x shared pool
+            OIMRConfig.setAffinityPercent(100);
+            alice.addEffect(new MobEffectInstance(MobEffects.ABSORPTION, 400, 0));
+            helper.assertTrue(Math.abs(alice.getAbsorptionAmount() - 4.0F) < 0.01F
+                && Math.abs(bob.getAbsorptionAmount() - 4.0F) < 0.01F,
+                "Both teammates should share 4.0 absorption at 100% affinity");
+
+            alice.hurtServer(level, level.damageSources().generic(), 2.0F);
+            helper.assertTrue(Math.abs(alice.getAbsorptionAmount() - 2.0F) < 0.01F
+                && Math.abs(bob.getAbsorptionAmount() - 2.0F) < 0.01F,
+                "Damage absorbed by Alice must reduce Bob's shared absorption to 2.0 (got bob=" + bob.getAbsorptionAmount() + ")");
+
+            // 2. At 50% affinity, Absorption effect scales 1x -> Bob gets 50% (2.0), and fully absorbed hit still propagates
+            OIMRConfig.setAffinityPercent(50);
+            alice.removeAllEffects();
+            bob.removeAllEffects();
+            alice.setAbsorptionAmount(0.0F);
+            bob.setAbsorptionAmount(0.0F);
+            alice.setHealth(20.0F);
+            bob.setHealth(20.0F);
+
+            alice.addEffect(new MobEffectInstance(MobEffects.ABSORPTION, 400, 0));
+            helper.assertTrue(Math.abs(alice.getAbsorptionAmount() - 4.0F) < 0.01F
+                && Math.abs(bob.getAbsorptionAmount() - 2.0F) < 0.01F,
+                "At 50% affinity Bob must receive 2.0 absorption from Alice's Golden Apple (got bob=" + bob.getAbsorptionAmount() + ")");
+
+            alice.damageCooldownTime = 0;
+            alice.hurtServer(level, level.damageSources().generic(), 2.0F);
+            helper.assertTrue(Math.abs(alice.getAbsorptionAmount() - 2.0F) < 0.01F
+                && Math.abs(alice.getHealth() - 20.0F) < 0.01F,
+                "Alice should absorb 2.0 damage cleanly");
+            helper.assertTrue(Math.abs(bob.getAbsorptionAmount() - 1.0F) < 0.01F
+                && Math.abs(bob.getHealth() - 20.0F) < 0.01F,
+                "Bob must lose 50% (1.0) absorption even when Alice's damage is 100% absorbed (got bobAbs=" + bob.getAbsorptionAmount() + ")");
+
+            // 3. Protection IV applies 1x on victim, not double-reduced on unarmored teammate
+            OIMRConfig.setSyncChestplate(false);
+            ItemStack protChest = new ItemStack(Items.DIAMOND_CHESTPLATE);
+            protChest.enchant(level.registryAccess().lookupOrThrow(Registries.ENCHANTMENT).getOrThrow(Enchantments.PROTECTION), 4);
+            alice.setItemSlot(EquipmentSlot.CHEST, protChest);
+            bob.setItemSlot(EquipmentSlot.CHEST, ItemStack.EMPTY);
+            alice.removeAllEffects();
+            bob.removeAllEffects();
+            alice.setAbsorptionAmount(0.0F);
+            bob.setAbsorptionAmount(0.0F);
+            alice.setHealth(20.0F);
+            bob.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            alice.hurtServer(level, level.damageSources().mobAttack(alice), 10.0F);
+            float aliceDmg = 20.0F - alice.getHealth();
+            float bobDmg = 20.0F - bob.getHealth();
+            helper.assertTrue(aliceDmg > 0.0F && Math.abs(bobDmg - aliceDmg * 0.5F) < 0.05F,
+                "Bob must take exact 50% of Alice's post-Protection damage (aliceDmg=" + aliceDmg + ", bobDmg=" + bobDmg + ")");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            OIMRConfig.setSyncChestplate(prevChest);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testCreativeTeammateDoesNotBlockPoisonFireOrSaturation(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        ServerPlayer creativeFirst = spawnTestPlayerWithUuid(server, level, UUID.fromString("00000000-0000-0000-0000-000000000001"), "HiveCrea29");
+        ServerPlayer survivalSecond = spawnTestPlayerWithUuid(server, level, UUID.fromString("00000000-0000-0000-0000-000000000002"), "HiveSurv29");
+        try {
+            OIMRConfig.setAffinityPercent(100);
+            creativeFirst.setGameMode(GameType.CREATIVE);
+            survivalSecond.setGameMode(GameType.SURVIVAL);
+
+            // 1. Poison must still tick on Survival teammate even when Creative teammate has lowest UUID
+            survivalSecond.setHealth(20.0F);
+            survivalSecond.addEffect(new MobEffectInstance(MobEffects.POISON, 200, 0));
+            for (int i = 0; i < 30; i++) {
+                MobEffectInstance cPoison = creativeFirst.getEffect(MobEffects.POISON);
+                if (cPoison != null) {
+                    cPoison.tickServer(level, creativeFirst, () -> {});
+                }
+                MobEffectInstance sPoison = survivalSecond.getEffect(MobEffects.POISON);
+                if (sPoison != null) {
+                    sPoison.tickServer(level, survivalSecond, () -> {});
+                }
+            }
+            helper.assertTrue(survivalSecond.getHealth() < 20.0F,
+                "Creative teammate must not block Poison damage on Survival teammate (hp=" + survivalSecond.getHealth() + ")");
+
+            // 2. Fire damage must still tick on Survival teammate even when Creative teammate precedes them
+            survivalSecond.removeAllEffects();
+            survivalSecond.damageCooldownTime = 0;
+            survivalSecond.setHealth(20.0F);
+            survivalSecond.igniteForTicks(20);
+            HiveMindManager.onEndServerTick(server);
+            helper.assertTrue(survivalSecond.getHealth() < 20.0F,
+                "Creative teammate must not block fire burn damage on Survival teammate (hp=" + survivalSecond.getHealth() + ")");
+
+            // 3. Saturation effect must tick 1x (not 2x) across Survival + Creative teammates
+            survivalSecond.clearFire();
+            survivalSecond.getFoodData().setFoodLevel(10);
+            survivalSecond.addEffect(new MobEffectInstance(MobEffects.SATURATION, 5, 0));
+            MobEffectInstance cSat = creativeFirst.getEffect(MobEffects.SATURATION);
+            MobEffectInstance sSat = survivalSecond.getEffect(MobEffects.SATURATION);
+            if (cSat != null) {
+                cSat.tickServer(level, creativeFirst, () -> {});
+            }
+            if (sSat != null) {
+                sSat.tickServer(level, survivalSecond, () -> {});
+            }
+            helper.assertTrue(survivalSecond.getFoodData().getFoodLevel() == 11,
+                "Saturation must tick exactly 1x per tick across party (expected 11, got " + survivalSecond.getFoodData().getFoodLevel() + ")");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, creativeFirst, survivalSecond);
+        }
+    }
+
+    @GameTest
+    public void testSplashPotionSub100AndInstantHealth1xAndLingeringCloud(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice30");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob30");
+        AreaEffectCloud cloud = null;
+        try {
+            Vec3 center = Vec3.atCenterOf(helper.absolutePos(new BlockPos(2, 2, 2)));
+
+            // 1. At 50% affinity, splash potion hitting only Alice propagates 50% duration to Bob
+            OIMRConfig.setAffinityPercent(50);
+            alice.setPos(center);
+            bob.setPos(center.x + 25.0, center.y, center.z);
+
+            ItemStack speedSplash = new ItemStack(Items.SPLASH_POTION);
+            speedSplash.set(
+                DataComponents.POTION_CONTENTS,
+                new PotionContents(Optional.empty(), Optional.empty(), List.of(new MobEffectInstance(MobEffects.SPEED, 400, 0)), Optional.empty())
+            );
+            ThrownSplashPotion splash1 = new ThrownSplashPotion(level, alice, speedSplash);
+            splash1.setPos(center.x, center.y + 0.5, center.z);
+            splash1.onHitAsPotion(level, speedSplash, new BlockHitResult(new Vec3(center.x, center.y + 0.5, center.z), Direction.UP, BlockPos.containing(center), false));
+            splash1.discard();
+
+            MobEffectInstance aliceSpeed = alice.getEffect(MobEffects.SPEED);
+            MobEffectInstance bobSpeed = bob.getEffect(MobEffects.SPEED);
+            helper.assertTrue(aliceSpeed != null && bobSpeed != null,
+                "At 50% affinity Bob must receive scaled Speed from splash hitting Alice");
+            helper.assertTrue(Math.abs(bobSpeed.getDuration() - Math.round(aliceSpeed.getDuration() * 0.5F)) <= 2,
+                "Bob's splash Speed duration must be 50% of Alice's (alice=" + aliceSpeed.getDuration() + ", bob=" + bobSpeed.getDuration() + ")");
+
+            // 2. At 100% affinity, Instant Health splash hitting BOTH players heals 1x (4 HP), not 2x (8 HP)
+            OIMRConfig.setAffinityPercent(100);
+            alice.removeAllEffects();
+            bob.removeAllEffects();
+            alice.setHealth(10.0F);
+            bob.setPos(center);
+            bob.setHealth(10.0F);
+
+            ItemStack healSplash = new ItemStack(Items.SPLASH_POTION);
+            healSplash.set(
+                DataComponents.POTION_CONTENTS,
+                new PotionContents(Optional.empty(), Optional.empty(), List.of(new MobEffectInstance(MobEffects.INSTANT_HEALTH, 1, 0)), Optional.empty())
+            );
+            ThrownSplashPotion splash2 = new ThrownSplashPotion(level, alice, healSplash);
+            splash2.setPos(center.x, center.y + 0.5, center.z);
+            splash2.onHitAsPotion(level, healSplash, new BlockHitResult(new Vec3(center.x, center.y + 0.5, center.z), Direction.UP, BlockPos.containing(center), false));
+            splash2.discard();
+
+            helper.assertTrue(alice.getHealth() > 10.0F && alice.getHealth() <= 14.01F && Math.abs(alice.getHealth() - bob.getHealth()) < 0.01F,
+                "Instant Health splash hitting both players must heal at most 1x (<= 14.0), got alice=" + alice.getHealth() + ", bob=" + bob.getHealth());
+
+            // 3. Lingering AreaEffectCloud Instant Health hitting both players in one pulse heals 1x (not 2x)
+            alice.setHealth(10.0F);
+            bob.setHealth(10.0F);
+            cloud = new AreaEffectCloud(level, center.x, center.y, center.z);
+            cloud.setRadius(3.0F);
+            cloud.setWaitTime(0);
+            cloud.setDuration(100);
+            cloud.setPotionContents(new PotionContents(Optional.empty(), Optional.empty(), List.of(new MobEffectInstance(MobEffects.INSTANT_HEALTH, 1, 0)), Optional.empty()));
+            level.addFreshEntity(cloud);
+            // Advance tickCount to multiple of 5 and tick
+            for (int i = 0; i < 5; i++) {
+                cloud.tick();
+            }
+            helper.assertTrue(alice.getHealth() > 10.0F && alice.getHealth() <= 14.01F && Math.abs(alice.getHealth() - bob.getHealth()) < 0.01F,
+                "AreaEffectCloud Instant Health hitting both players must heal 1x (<= 14.0), got alice=" + alice.getHealth());
+
+            helper.succeed();
+        } finally {
+            if (cloud != null) {
+                cloud.discard();
+            }
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testGroupTotemAndRespirationScaling(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        boolean prevOffHand = OIMRConfig.isSyncOffHandEnabled();
+        boolean prevHelmet = OIMRConfig.isSyncHelmetEnabled();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice31");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob31");
+        try {
+            // 1. At 100% affinity, Bob's personal offhand Totem saves Alice when Alice takes lethal damage
+            OIMRConfig.setAffinityPercent(100);
+            OIMRConfig.setSyncOffHand(false);
+            alice.setItemSlot(EquipmentSlot.OFFHAND, ItemStack.EMPTY);
+            bob.setItemSlot(EquipmentSlot.OFFHAND, new ItemStack(Items.TOTEM_OF_UNDYING));
+            alice.setHealth(20.0F);
+            bob.setHealth(20.0F);
+
+            alice.hurtServer(level, level.damageSources().generic(), 50.0F);
+
+            helper.assertFalse(alice.isDeadOrDying(), "Alice must be saved by teammate Bob's Totem at 100% affinity");
+            helper.assertFalse(bob.isDeadOrDying(), "Bob must remain alive when Totem procs for the group");
+            helper.assertTrue(bob.getItemBySlot(EquipmentSlot.OFFHAND).isEmpty(), "Bob's Totem must be consumed");
+            helper.assertTrue(alice.hasEffect(MobEffects.REGENERATION) && bob.hasEffect(MobEffects.REGENERATION),
+                "Both teammates must receive Totem Regeneration effects");
+
+            // 2. Respiration affects teammates even with syncHelmet = false, proportional to affinity
+            OIMRConfig.setSyncHelmet(false);
+            ItemStack respHelmet = new ItemStack(Items.DIAMOND_HELMET);
+            respHelmet.enchant(level.registryAccess().lookupOrThrow(Registries.ENCHANTMENT).getOrThrow(Enchantments.RESPIRATION), 3);
+            alice.setItemSlot(EquipmentSlot.HEAD, respHelmet);
+            bob.setItemSlot(EquipmentSlot.HEAD, ItemStack.EMPTY);
+            ((HiveLivingEntityAccess) alice).oimr$detectEquipmentUpdates();
+            ((HiveLivingEntityAccess) bob).oimr$detectEquipmentUpdates();
+
+            // At 50% affinity: Bob has no helmet, Alice has Respiration III (bonus 3.0 -> 50% = 1.5 -> ~40% loss chance vs 100% without)
+            OIMRConfig.setAffinityPercent(50);
+            int air50 = 300;
+            for (int i = 0; i < 200; i++) {
+                air50 = ((HiveLivingEntityAccess) bob).oimr$decreaseAirSupply(air50);
+            }
+            int lost50 = 300 - air50;
+            helper.assertTrue(lost50 > 20 && lost50 < 150,
+                "At 50% affinity Bob must inherit partial Respiration from Alice (expected ~80 air lost in 200 ticks, got " + lost50 + ")");
+
+            // At 0% affinity: Bob inherits 0% Respiration -> loses all 200 air
+            OIMRConfig.setAffinityPercent(0);
+            int air0 = 300;
+            for (int i = 0; i < 200; i++) {
+                air0 = ((HiveLivingEntityAccess) bob).oimr$decreaseAirSupply(air0);
+            }
+            helper.assertTrue(air0 == 100,
+                "At 0% affinity Bob must receive no Respiration bonus from Alice (expected 100 air left, got " + air0 + ")");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            OIMRConfig.setSyncOffHand(prevOffHand);
+            OIMRConfig.setSyncHelmet(prevHelmet);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testBondSyncPayloadFromConfigAndCodec(GameTestHelper helper) {
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        float prevHungerWeight = OIMRConfig.getHungerWeight();
+        try {
+            OIMRConfig.setAffinityPercent(100);
+            OIMRConfig.setHungerWeight(1.0F);
+            OIMRBondSyncPayload canonical = OIMRBondSyncPayload.fromConfig();
+            helper.assertTrue(
+                canonical.hungerPercent() == 100 && canonical.effectsPercent() == 100 && canonical.damagePercent() == 100,
+                "Canonical config must produce 100/100/100 bond sync payload"
+            );
+
+            OIMRConfig.setAffinityPercent(65);
+            OIMRConfig.setHungerWeight(0.5F);
+            OIMRBondSyncPayload partial = OIMRBondSyncPayload.fromConfig();
+            FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+            OIMRBondSyncPayload.STREAM_CODEC.encode(buf, partial);
+            OIMRBondSyncPayload decoded = OIMRBondSyncPayload.STREAM_CODEC.decode(buf);
+            helper.assertTrue(
+                decoded.hungerPercent() == 50 && decoded.effectsPercent() == 65 && decoded.damagePercent() == 65,
+                "Decoded bond sync payload must preserve hunger=50, effects=65, damage=65 (got "
+                    + decoded.hungerPercent() + "/" + decoded.effectsPercent() + "/" + decoded.damagePercent() + ")"
+            );
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            OIMRConfig.setHungerWeight(prevHungerWeight);
+        }
+    }
+
+    @GameTest
+    public void testFractionalDamageAndHealAccumulationAtLowAffinity(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice33");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob33");
+        try {
+            OIMRConfig.setAffinityPercent(1);
+            alice.setHealth(20.0F);
+            bob.setHealth(20.0F);
+
+            // 1. Alice takes 10 damage at 1% affinity -> 0.1 shared (< 1.0), held in debt on Bob
+            alice.hurtServer(level, level.damageSources().generic(), 10.0F);
+            HiveMind hive = HiveMindData.get(server).getIfPresent(HiveMindData.DEFAULT_HIVE_ID);
+            helper.assertTrue(hive != null, "Default hive must exist");
+            helper.assertTrue(Math.abs(bob.getHealth() - 20.0F) < 0.001F,
+                "Sub-unit 0.1 shared damage must wait until reaching 1.0 (got bob=" + bob.getHealth() + ")");
+            helper.assertTrue(Math.abs(hive.getDamageRemainder(bob.getUUID()) - 0.1D) < 1.0E-5D,
+                "Bob must have 0.1 damage remainder stored (got " + hive.getDamageRemainder(bob.getUUID()) + ")");
+
+            // Alice heals back to 20 so she can absorb another 90 damage (0.9 shared)
+            alice.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            // Take 90 damage in 2 hits (50 + 40) since max HP is 20 -> wait: hurtServer damageTaken is capped?
+            // Actually LivingEntity.actuallyHurt passes raw post-armor damage (not capped by remaining HP unless clamped? Let's test 10 hits of 10!)
+            for (int i = 0; i < 8; i++) {
+                alice.setHealth(20.0F);
+                alice.damageCooldownTime = 0;
+                alice.hurtServer(level, level.damageSources().generic(), 10.0F);
+            }
+            // Total so far: 9 * 0.1 = 0.9 -> Bob still at 20.0 HP
+            helper.assertTrue(Math.abs(bob.getHealth() - 20.0F) < 0.001F
+                && Math.abs(hive.getDamageRemainder(bob.getUUID()) - 0.9D) < 1.0E-5D,
+                "After 0.9 total shared damage Bob must still be at 20.0 HP with 0.9 remainder (got hp="
+                    + bob.getHealth() + ", rem=" + hive.getDamageRemainder(bob.getUUID()) + ")");
+
+            // 10th hit of 10 -> +0.1 = 1.0 -> applies 1.0 damage to Bob!
+            alice.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            alice.hurtServer(level, level.damageSources().generic(), 10.0F);
+            helper.assertTrue(Math.abs(bob.getHealth() - 19.0F) < 0.01F
+                && hive.getDamageRemainder(bob.getUUID()) < 1.0E-5D,
+                "Reaching 1.0 total shared damage must apply full 1.0 HP to Bob and clear remainder (got hp="
+                    + bob.getHealth() + ", rem=" + hive.getDamageRemainder(bob.getUUID()) + ")");
+
+            // Test overshoot beyond 0.9: 0.1 owed + 1.5 new -> applies 1.6 total damage
+            alice.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            alice.hurtServer(level, level.damageSources().generic(), 10.0F); // +0.1 stored
+            bob.setHealth(20.0F);
+            alice.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            alice.hurtServer(level, level.damageSources().generic(), 150.0F); // +1.5 -> 1.6 applied
+            helper.assertTrue(Math.abs(bob.getHealth() - 18.4F) < 0.02F
+                && hive.getDamageRemainder(bob.getUUID()) < 1.0E-5D,
+                "Accumulated 0.1 + 1.5 must apply 1.6 damage to Bob (got hp=" + bob.getHealth() + ")");
+
+            // 2. Fractional healing: Bob at 15.0 HP; 10x Alice heal(10.0) at 1% -> 0.1 * 10 = 1.0 -> Bob heals to 16.0
+            bob.setHealth(15.0F);
+            for (int i = 0; i < 9; i++) {
+                alice.setHealth(10.0F);
+                alice.heal(10.0F);
+            }
+            helper.assertTrue(Math.abs(bob.getHealth() - 15.0F) < 0.001F
+                && Math.abs(hive.getHealRemainder(bob.getUUID()) - 0.9D) < 1.0E-5D,
+                "After 0.9 total shared heal Bob must stay at 15.0 HP with 0.9 remainder (got hp="
+                    + bob.getHealth() + ", rem=" + hive.getHealRemainder(bob.getUUID()) + ")");
+
+            alice.setHealth(10.0F);
+            alice.heal(10.0F);
+            helper.assertTrue(Math.abs(bob.getHealth() - 16.0F) < 0.01F
+                && hive.getHealRemainder(bob.getUUID()) < 1.0E-5D,
+                "10th heal reaching 1.0 must heal Bob to 16.0 HP (got hp=" + bob.getHealth() + ")");
+
+            // Full-HP Bob must NOT stockpile healing debt
+            bob.setHealth(20.0F);
+            alice.setHealth(10.0F);
+            alice.heal(10.0F);
+            helper.assertTrue(hive.getHealRemainder(bob.getUUID()) < 1.0E-5D,
+                "Full-HP teammate must not stockpile healing remainder");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testFractionalEffectDurationAndXpFlushOnSolo(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        float prevXpWeight = OIMRConfig.getXpWeight();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice34");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob34");
+        try {
+            HiveMind hive = HiveMindData.get(server).getIfPresent(HiveMindData.DEFAULT_HIVE_ID);
+            helper.assertTrue(hive != null, "Default hive must exist");
+
+            // 1. Effect duration accumulation at 1% affinity: 40 ticks -> 0.4 ticks per application
+            OIMRConfig.setAffinityPercent(1);
+            alice.addEffect(new MobEffectInstance(MobEffects.SPEED, 40, 0));
+            helper.assertFalse(bob.hasEffect(MobEffects.SPEED),
+                "0.4 ticks of Speed must not apply yet");
+            helper.assertTrue(Math.abs(hive.getEffectDurationRemainder(bob.getUUID(), MobEffects.SPEED) - 0.4D) < 1.0E-5D,
+                "Bob must store 0.4 Speed duration remainder");
+
+            alice.removeEffect(MobEffects.SPEED);
+            alice.addEffect(new MobEffectInstance(MobEffects.SPEED, 40, 0)); // 0.8 total
+            helper.assertFalse(bob.hasEffect(MobEffects.SPEED),
+                "0.8 ticks of Speed must still wait in remainder");
+
+            alice.removeEffect(MobEffects.SPEED);
+            alice.addEffect(new MobEffectInstance(MobEffects.SPEED, 40, 0)); // 1.2 total -> applies 1 tick, keeps 0.2
+            MobEffectInstance bobSpeed = bob.getEffect(MobEffects.SPEED);
+            helper.assertTrue(bobSpeed != null && bobSpeed.getDuration() == 1,
+                "1.2 total ticks must apply 1 tick of Speed to Bob (got " + (bobSpeed != null ? bobSpeed.getDuration() : -1) + ")");
+            helper.assertTrue(Math.abs(hive.getEffectDurationRemainder(bob.getUUID(), MobEffects.SPEED) - 0.2D) < 1.0E-5D,
+                "0.2 ticks remainder must stay stored after applying 1 tick");
+
+            // Two more 40-tick hits: 0.2 + 0.4 + 0.4 = 1.0 -> applies 1 tick, 0.0 remainder
+            bob.removeEffect(MobEffects.SPEED);
+            alice.removeEffect(MobEffects.SPEED);
+            alice.addEffect(new MobEffectInstance(MobEffects.SPEED, 40, 0));
+            alice.removeEffect(MobEffects.SPEED);
+            alice.addEffect(new MobEffectInstance(MobEffects.SPEED, 40, 0));
+            MobEffectInstance bobSpeed2 = bob.getEffect(MobEffects.SPEED);
+            helper.assertTrue(bobSpeed2 != null && bobSpeed2.getDuration() == 1
+                && hive.getEffectDurationRemainder(bob.getUUID(), MobEffects.SPEED) < 1.0E-5D,
+                "0.2 + 0.4 + 0.4 = 1.0 must apply 1 tick and clear remainder");
+
+            // 2. XP remainder accumulated with 2 players (0.5) must still flush when Bob leaves and weight=1.0
+            OIMRConfig.setXpWeight(1.0F);
+            alice.setExperienceLevels(0);
+            alice.setExperiencePoints(0);
+            alice.giveExperiencePoints(1); // 0.5 remainder stored
+            helper.assertTrue(alice.totalExperience == 0 && Math.abs(hive.getXpRemainder() - 0.5D) < 1.0E-5D,
+                "1 XP with 2 players must leave 0.5 remainder");
+
+            server.getPlayerList().remove(bob);
+            bob = null;
+            alice.giveExperiencePoints(1); // 0.5 + 1.0 = 1.5 -> grants 1 XP, 0.5 remainder
+            helper.assertTrue(alice.totalExperience == 1 && Math.abs(hive.getXpRemainder() - 0.5D) < 1.0E-5D,
+                "Solo player with 0.5 owed XP + 1 XP must receive 1 XP and keep 0.5 remainder (got xp="
+                    + alice.totalExperience + ", rem=" + hive.getXpRemainder() + ")");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            OIMRConfig.setXpWeight(prevXpWeight);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testPeriodicEffectsFullAmplifierDominantSourceAndAffinityReset(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice35");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob35");
+        Zombie zombie = EntityTypes.ZOMBIE.create(level, EntitySpawnReason.COMMAND);
+        try {
+            HiveMind hive = HiveMindData.get(server).getIfPresent(HiveMindData.DEFAULT_HIVE_ID);
+            helper.assertTrue(hive != null && zombie != null, "Default hive and zombie must exist");
+            level.addFreshEntity(zombie);
+
+            // 1. Full amplifier preserved at low affinity (Speed III for 200 ticks at 1% -> Speed III for 2 ticks)
+            OIMRConfig.setAffinityPercent(1);
+            alice.addEffect(new MobEffectInstance(MobEffects.SPEED, 200, 2));
+            MobEffectInstance bobSpeed = bob.getEffect(MobEffects.SPEED);
+            helper.assertTrue(bobSpeed != null && bobSpeed.getAmplifier() == 2 && bobSpeed.getDuration() == 2,
+                "Bob must receive full Speed III (amp 2) for 2 ticks at 1% affinity (got amp="
+                    + (bobSpeed != null ? bobSpeed.getAmplifier() : -1) + ", dur=" + (bobSpeed != null ? bobSpeed.getDuration() : -1) + ")");
+
+            // 2. Periodic Poison I accumulates in separate remainder without touching HP, then applies 25 ticks and ticks damage!
+            bob.setHealth(20.0F);
+            for (int i = 0; i < 12; i++) {
+                alice.removeEffect(MobEffects.POISON);
+                alice.addEffect(new MobEffectInstance(MobEffects.POISON, 200, 0)); // 2 ticks per hit -> 24 ticks total (< 25)
+            }
+            helper.assertFalse(bob.hasEffect(MobEffects.POISON),
+                "24 accumulated ticks of Poison I must wait for 25-tick interval");
+            helper.assertTrue(Math.abs(bob.getHealth() - 20.0F) < 0.001F,
+                "Bob's real HP must remain untouched while Poison remainder is pending");
+
+            alice.removeEffect(MobEffects.POISON);
+            alice.addEffect(new MobEffectInstance(MobEffects.POISON, 200, 0)); // 26 ticks -> applies 25 ticks, keeps 1
+            MobEffectInstance bobPoison = bob.getEffect(MobEffects.POISON);
+            helper.assertTrue(bobPoison != null && bobPoison.getDuration() == 25,
+                "Reaching 25 ticks must apply 25-tick Poison I (got " + (bobPoison != null ? bobPoison.getDuration() : -1) + ")");
+            bobPoison.tickServer(level, bob, () -> {});
+            helper.assertTrue(bob.getHealth() < 20.0F,
+                "Applied 25-tick Poison I must immediately tick real damage on Bob (got hp=" + bob.getHealth() + ")");
+
+            // 3. Dominant indirect damage source wins over smaller final hit (0.9 Zombie vs 0.1 Cactus -> Zombie credited!)
+            bob.removeAllEffects();
+            bob.setHealth(1.0F);
+            for (int i = 0; i < 9; i++) {
+                alice.setHealth(20.0F);
+                alice.damageCooldownTime = 0;
+                alice.hurtServer(level, level.damageSources().mobAttack(zombie), 10.0F); // 0.1 * 9 = 0.9 from Zombie
+            }
+            alice.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            alice.hurtServer(level, level.damageSources().cactus(), 10.0F); // +0.1 from Cactus -> 1.0 kills Bob
+            helper.assertTrue(bob.isDeadOrDying(), "Bob must die when accumulated damage reaches 1.0");
+            Component deathMsg = HiveMindManager.getLastHiveDeathMessage(bob.getUUID());
+            helper.assertTrue(deathMsg != null
+                && deathMsg.getContents() instanceof TranslatableContents tc
+                && "death.oimr.affinity.player".equals(tc.getKey()),
+                "Lethal accumulated damage dominated by Zombie (0.9 vs 0.1 Cactus) must credit Zombie attacker (got " + deathMsg + ")");
+
+            // 4. Invalid >100% affinity in config file resets to 100% on load/startup check
+            java.nio.file.Path configPath = OIMRConfig.getConfigPath();
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            String originalContent = java.nio.file.Files.exists(configPath) ? java.nio.file.Files.readString(configPath) : null;
+            try {
+                java.nio.file.Files.createDirectories(configPath.getParent());
+                java.nio.file.Files.writeString(configPath, "affinity=150\n");
+                OIMRConfig.load();
+                helper.assertTrue(OIMRConfig.getAffinityPercent() == 100,
+                    "Affinity > 100% in config must reset to 100% (got " + OIMRConfig.getAffinityPercent() + ")");
+                helper.assertTrue(OIMRConfig.consumeInvalidAffinityResetPending(),
+                    "Config load must flag invalid affinity reset so players are notified in chat");
+            } finally {
+                if (originalContent != null) {
+                    java.nio.file.Files.writeString(configPath, originalContent);
+                    OIMRConfig.load();
+                } else {
+                    OIMRConfig.resetToDefaults();
+                }
+            }
+
+            helper.succeed();
+        } catch (java.io.IOException e) {
+            throw new RuntimeException(e);
+        } finally {
+            if (zombie != null) {
+                zombie.discard();
+            }
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testSpecialEffectsSub100SaturationOmenHealthBoostAndTriggers(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        float prevHungerWeight = OIMRConfig.getHungerWeight();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice36");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob36");
+        try {
+            HiveMind hive = HiveMindData.get(server).getIfPresent(HiveMindData.DEFAULT_HIVE_ID);
+            helper.assertTrue(hive != null, "Default hive must exist");
+
+            // 1. Saturation & Hunger at 50% affinity stay 1x on shared FoodData
+            OIMRConfig.setAffinityPercent(50);
+            OIMRConfig.setHungerWeight(1.0F);
+            alice.getFoodData().setFoodLevel(10);
+            alice.getFoodData().setSaturation(0.0F);
+            alice.addEffect(new MobEffectInstance(MobEffects.SATURATION, 5, 0));
+            helper.assertFalse(bob.hasEffect(MobEffects.SATURATION),
+                "Saturation must not propagate to teammates below 100% affinity");
+            alice.getEffect(MobEffects.SATURATION).tickServer(level, alice, () -> {});
+            helper.assertTrue(alice.getFoodData().getFoodLevel() == 11 && bob.getFoodData().getFoodLevel() == 11,
+                "Saturation must feed shared FoodData exactly 1x (expected 11, got " + alice.getFoodData().getFoodLevel() + ")");
+
+            // Even if both players independently gain Saturation, only 1 ticks per game tick
+            bob.addEffect(new MobEffectInstance(MobEffects.SATURATION, 5, 0));
+            alice.getEffect(MobEffects.SATURATION).tickServer(level, alice, () -> {});
+            bob.getEffect(MobEffects.SATURATION).tickServer(level, bob, () -> {});
+            helper.assertTrue(alice.getFoodData().getFoodLevel() == 12,
+                "Duplicate Saturation across teammates must still tick 1x on shared FoodData (expected 12, got "
+                    + alice.getFoodData().getFoodLevel() + ")");
+
+            // Hunger effect applies un-diluted 1x exhaustion when not propagated
+            alice.removeAllEffects();
+            bob.removeAllEffects();
+            ((HiveFoodDataFieldsAccess) alice.getFoodData()).oimr$setExhaustionLevel(0.0F);
+            alice.addEffect(new MobEffectInstance(MobEffects.HUNGER, 40, 0));
+            helper.assertFalse(bob.hasEffect(MobEffects.HUNGER),
+                "Hunger effect must not propagate below 100% affinity");
+            alice.getEffect(MobEffects.HUNGER).tickServer(level, alice, () -> {});
+            float hungerExh = ((HiveFoodDataFieldsAccess) alice.getFoodData()).oimr$getExhaustionLevel();
+            helper.assertTrue(Math.abs(hungerExh - 0.005F) < 1.0E-5F,
+                "Hunger effect must apply full 1x exhaustion (0.005) on shared FoodData (got " + hungerExh + ")");
+
+            // 2. Bad Omen accumulates to 1.0 with full duration; Raid Omen does not propagate
+            alice.addEffect(new MobEffectInstance(MobEffects.RAID_OMEN, 600, 0));
+            helper.assertFalse(bob.hasEffect(MobEffects.RAID_OMEN),
+                "Raid Omen must not propagate directly below 100% affinity");
+
+            alice.addEffect(new MobEffectInstance(MobEffects.BAD_OMEN, 12000, 0));
+            helper.assertFalse(bob.hasEffect(MobEffects.BAD_OMEN),
+                "First Bad Omen I at 50% must accumulate 0.5 trigger debt");
+            alice.removeEffect(MobEffects.BAD_OMEN);
+            alice.addEffect(new MobEffectInstance(MobEffects.BAD_OMEN, 12000, 0));
+            MobEffectInstance bobBadOmen = bob.getEffect(MobEffects.BAD_OMEN);
+            helper.assertTrue(bobBadOmen != null && bobBadOmen.getDuration() == 12000 && bobBadOmen.getAmplifier() == 0,
+                "Second Bad Omen I at 50% must grant Bad Omen I with full 12000-tick duration (got "
+                    + (bobBadOmen != null ? bobBadOmen.getDuration() : -1) + ")");
+
+            // 3. Health Boost scales max health (+2.0 at 50%) and accumulates below 1.0 at 1%
+            alice.addEffect(new MobEffectInstance(MobEffects.HEALTH_BOOST, 200, 0));
+            helper.assertTrue(Math.abs(alice.getMaxHealth() - 24.0F) < 0.01F
+                && Math.abs(bob.getMaxHealth() - 22.0F) < 0.01F,
+                "Health Boost I at 50% must grant +2.0 max HP to Bob (got alice="
+                    + alice.getMaxHealth() + ", bob=" + bob.getMaxHealth() + ")");
+
+            // 4. Oozing accumulates 0.5 + 0.5 = 1.0; Infested records scaled chance
+            alice.addEffect(new MobEffectInstance(MobEffects.OOZING, 600, 0));
+            helper.assertFalse(bob.hasEffect(MobEffects.OOZING),
+                "First Oozing at 50% must wait at 0.5 trigger remainder");
+            alice.removeEffect(MobEffects.OOZING);
+            alice.addEffect(new MobEffectInstance(MobEffects.OOZING, 600, 0));
+            helper.assertTrue(bob.hasEffect(MobEffects.OOZING) && bob.getEffect(MobEffects.OOZING).getDuration() == 600,
+                "Second Oozing at 50% must grant full Oozing");
+
+            alice.addEffect(new MobEffectInstance(MobEffects.INFESTED, 600, 0));
+            helper.assertTrue(bob.hasEffect(MobEffects.INFESTED)
+                && Math.abs(HiveMindManager.getInfestedChanceScale(bob) - 0.5D) < 1.0E-5D
+                && Math.abs(HiveMindManager.getInfestedChanceScale(alice) - 1.0D) < 1.0E-5D,
+                "Infested at 50% must scale Bob's spawn chance to 0.5 while Alice keeps 1.0");
+
+            // 5. At 1% affinity: Absorption (< 1.0) and Health Boost (< 1.0) wait, Darkness waits for 22 ticks
+            alice.removeAllEffects();
+            bob.removeAllEffects();
+            bob.setAbsorptionAmount(0.0F);
+            OIMRConfig.setAffinityPercent(1);
+            alice.addEffect(new MobEffectInstance(MobEffects.ABSORPTION, 2400, 0));
+            helper.assertFalse(bob.hasEffect(MobEffects.ABSORPTION) || bob.getAbsorptionAmount() > 0.0F,
+                "1% Absorption (0.04 shield) must accumulate instead of rendering phantom golden heart");
+            alice.addEffect(new MobEffectInstance(MobEffects.HEALTH_BOOST, 200, 0));
+            helper.assertFalse(bob.hasEffect(MobEffects.HEALTH_BOOST) || bob.getMaxHealth() > 20.0F,
+                "1% Health Boost (0.04 max HP) must accumulate instead of granting full +4 max HP");
+
+            for (int i = 0; i < 10; i++) {
+                alice.removeEffect(MobEffects.DARKNESS);
+                alice.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 200, 0)); // 2 ticks each -> 20 ticks (< 22)
+            }
+            helper.assertFalse(bob.hasEffect(MobEffects.DARKNESS),
+                "20 accumulated ticks of Darkness must wait for 22-tick blend unit");
+            alice.removeEffect(MobEffects.DARKNESS);
+            alice.addEffect(new MobEffectInstance(MobEffects.DARKNESS, 200, 0)); // 22 ticks -> applies 22 ticks
+            helper.assertTrue(bob.hasEffect(MobEffects.DARKNESS) && bob.getEffect(MobEffects.DARKNESS).getDuration() == 22,
+                "Reaching 22 ticks must apply 22-tick Darkness");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            OIMRConfig.setHungerWeight(prevHungerWeight);
             cleanupPlayers(server, alice, bob);
         }
     }

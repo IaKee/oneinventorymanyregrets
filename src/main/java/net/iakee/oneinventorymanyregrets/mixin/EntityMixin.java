@@ -28,7 +28,7 @@ public class EntityMixin {
         float amount,
         Operation<Boolean> original
     ) {
-        if (HiveMindManager.isAttachedServerPlayer(instance)) {
+        if (HiveMindManager.isFullAffinityEnvironmentShared(instance)) {
             return false;
         }
         return original.call(instance, level, source, amount);
@@ -42,7 +42,7 @@ public class EntityMixin {
         )
     )
     private boolean oimr$suppressPerPlayerFireCountdown(Entity instance, int ticks) {
-        return !HiveMindManager.isAttachedServerPlayer(instance);
+        return !HiveMindManager.isFullAffinityEnvironmentShared(instance);
     }
 
     @WrapWithCondition(
@@ -53,7 +53,7 @@ public class EntityMixin {
         )
     )
     private boolean oimr$suppressPerPlayerBaseTickClearFire(Entity instance) {
-        return !HiveMindManager.isAttachedServerPlayer(instance);
+        return !HiveMindManager.isFullAffinityEnvironmentShared(instance);
     }
 
     @Inject(method = "igniteForTicks", at = @At("TAIL"))

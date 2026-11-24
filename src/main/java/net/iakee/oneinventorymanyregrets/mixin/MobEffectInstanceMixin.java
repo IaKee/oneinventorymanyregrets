@@ -36,6 +36,11 @@ public class MobEffectInstanceMixin {
         if (!HiveMindManager.shouldApplyPeriodicEffectTick(target, this.effect)) {
             return true;
         }
-        return original.call(instance, level, target, amplification);
+        int tickFlags = HiveMindManager.beginPeriodicEffectTick(target, this.effect);
+        try {
+            return original.call(instance, level, target, amplification);
+        } finally {
+            HiveMindManager.endPeriodicEffectTick(tickFlags);
+        }
     }
 }
