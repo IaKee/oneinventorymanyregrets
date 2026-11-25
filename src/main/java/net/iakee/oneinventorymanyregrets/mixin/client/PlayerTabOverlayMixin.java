@@ -125,9 +125,9 @@ public abstract class PlayerTabOverlayMixin {
         } else {
             this.oimr$hungerPercent = Math.max(0, Math.round(OIMRConfig.getHungerWeight() * 100.0F));
             int affinity = Math.max(OIMRConfig.MIN_AFFINITY, Math.min(OIMRConfig.MAX_AFFINITY, OIMRConfig.getAffinityPercent()));
-            this.oimr$effectsPercent = affinity;
+            this.oimr$effectsPercent = OIMRConfig.isSyncEffectsEnabled() ? affinity : 0;
             this.oimr$damagePercent = affinity;
-            this.oimr$canonical = this.oimr$hungerPercent == 100 && affinity == 100;
+            this.oimr$canonical = this.oimr$hungerPercent == 100 && this.oimr$effectsPercent == 100 && affinity == 100;
         }
 
         Font font = this.minecraft.font;

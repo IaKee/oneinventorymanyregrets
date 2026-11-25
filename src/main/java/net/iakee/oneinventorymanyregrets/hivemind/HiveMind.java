@@ -27,6 +27,7 @@ import java.util.Collection;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -167,7 +168,8 @@ public final class HiveMind {
         ProgressState.CODEC.optionalFieldOf("progress_state", ProgressState.DEFAULT).forGetter(HiveMind::encodeProgressState),
         Codec.unboundedMap(Codec.STRING, PlayerRemainderState.CODEC)
             .optionalFieldOf("player_remainders", Map.of())
-            .forGetter(HiveMind::encodePlayerRemainders)
+            .forGetter(HiveMind::encodePlayerRemainders),
+        ItemStack.CODEC.listOf().optionalFieldOf("pending_sync_drops", List.of()).forGetter(HiveMind::encodePendingSyncDrops)
     ).apply(instance, HiveMind::fromCodec));
 
     private final String id;
@@ -191,10 +193,15 @@ public final class HiveMind {
     private final Set<ResourceKey<Recipe<?>>> knownRecipes;
     private final Set<ResourceKey<Recipe<?>>> highlightRecipes;
     private final Map<UUID, MutablePlayerRemainders> playerRemainders;
+    private final List<ItemStack> pendingSyncDrops;
 
     private long lastFoodTickGameTime = -1L;
+    private long lastPeacefulRegenTickGameTime = -1L;
     private long lastEnvironmentTickGameTime = -1L;
     private long lastFreezeIncrementGameTime = -1L;
+    private long lastEnvFireHurtTick = Long.MIN_VALUE;
+    private float lastEnvFireHurtDamage = 0.0F;
+    private boolean anyMemberUnderwater = false;
     private double xpRemainder = 0.0D;
     private double xpLevelRemainder = 0.0D;
     private final Map<Holder<MobEffect>, EffectTickClaim> primaryEffectTickers = new HashMap<>();
@@ -224,6 +231,7 @@ public final class HiveMind {
         this.knownRecipes = new LinkedHashSet<>();
         this.highlightRecipes = new LinkedHashSet<>();
         this.playerRemainders = new HashMap<>();
+        this.pendingSyncDrops = new ArrayList<>();
     }
 
     private static int nonZeroRandomSeed() {
@@ -241,7 +249,8 @@ public final class HiveMind {
         InventoryState invState,
         VitalsState vitals,
         ProgressState progress,
-        Map<String, PlayerRemainderState> remainders
+        Map<String, PlayerRemainderState> remainders,
+        List<ItemStack> pendingSyncDrops
     ) {
         HiveMind hive = new HiveMind(id);
         hive.initialized = initialized;
@@ -324,7 +333,26 @@ public final class HiveMind {
             }
         });
 
+        for (ItemStack pending : pendingSyncDrops) {
+            if (!pending.isEmpty()) {
+                hive.pendingSyncDrops.add(pending.copy());
+            }
+        }
+
         return hive;
+    }
+
+    private List<ItemStack> encodePendingSyncDrops() {
+        if (this.pendingSyncDrops.isEmpty()) {
+            return List.of();
+        }
+        List<ItemStack> copies = new ArrayList<>(this.pendingSyncDrops.size());
+        for (ItemStack stack : this.pendingSyncDrops) {
+            if (!stack.isEmpty()) {
+                copies.add(stack.copy());
+            }
+        }
+        return copies;
     }
 
     private InventoryState encodeInventoryState() {
@@ -502,6 +530,8 @@ public final class HiveMind {
         this.ticksFrozen = 0;
         this.effects.clear();
         this.playerRemainders.clear();
+        this.lastEnvFireHurtTick = Long.MIN_VALUE;
+        this.lastEnvFireHurtDamage = 0.0F;
     }
 
     public void resetExperience() {
@@ -663,6 +693,37 @@ public final class HiveMind {
 
     public void clearAllPlayerRemainders() {
         this.playerRemainders.clear();
+    }
+
+    public void clearAllEffectRemainders() {
+        Iterator<Map.Entry<UUID, MutablePlayerRemainders>> iterator = this.playerRemainders.entrySet().iterator();
+        while (iterator.hasNext()) {
+            MutablePlayerRemainders rem = iterator.next().getValue();
+            rem.effectDurations.clear();
+            rem.effectTriggers.clear();
+            if (rem.isEmpty()) {
+                iterator.remove();
+            }
+        }
+    }
+
+    public void clearPrimaryEffectTickers() {
+        this.primaryEffectTickers.clear();
+    }
+
+    public void addPendingSyncDrop(ItemStack stack) {
+        if (!stack.isEmpty()) {
+            this.pendingSyncDrops.add(stack.copy());
+        }
+    }
+
+    public List<ItemStack> drainPendingSyncDrops() {
+        if (this.pendingSyncDrops.isEmpty()) {
+            return List.of();
+        }
+        List<ItemStack> drained = new ArrayList<>(this.pendingSyncDrops);
+        this.pendingSyncDrops.clear();
+        return drained;
     }
 
     public void setExperience(int level, int total, float progress) {
@@ -837,12 +898,52 @@ public final class HiveMind {
         }
     }
 
+    public void resetTickClaims() {
+        this.lastFoodTickGameTime = -1L;
+        this.lastPeacefulRegenTickGameTime = -1L;
+        this.lastEnvironmentTickGameTime = -1L;
+        this.lastFreezeIncrementGameTime = -1L;
+        this.lastEnvFireHurtTick = Long.MIN_VALUE;
+        this.lastEnvFireHurtDamage = 0.0F;
+        this.anyMemberUnderwater = false;
+        this.primaryEffectTickers.clear();
+    }
+
     public boolean tryClaimFoodTick(long gameTime) {
         if (this.lastFoodTickGameTime == gameTime) {
             return false;
         }
         this.lastFoodTickGameTime = gameTime;
         return true;
+    }
+
+    public boolean tryClaimPeacefulRegenTick(long gameTime) {
+        if (this.lastPeacefulRegenTickGameTime == gameTime) {
+            return false;
+        }
+        this.lastPeacefulRegenTickGameTime = gameTime;
+        return true;
+    }
+
+    public long getLastEnvFireHurtTick() {
+        return this.lastEnvFireHurtTick;
+    }
+
+    public float getLastEnvFireHurtDamage() {
+        return this.lastEnvFireHurtDamage;
+    }
+
+    public void recordEnvFireHurt(long gameTime, float damage) {
+        this.lastEnvFireHurtTick = gameTime;
+        this.lastEnvFireHurtDamage = damage;
+    }
+
+    public boolean isAnyMemberUnderwater() {
+        return this.anyMemberUnderwater;
+    }
+
+    public void setAnyMemberUnderwater(boolean anyMemberUnderwater) {
+        this.anyMemberUnderwater = anyMemberUnderwater;
     }
 
     public boolean tryClaimEnvironmentTick(long gameTime) {

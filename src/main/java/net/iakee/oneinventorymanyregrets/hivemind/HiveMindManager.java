@@ -2,6 +2,7 @@ package net.iakee.oneinventorymanyregrets.hivemind;
 
 import net.iakee.oneinventorymanyregrets.OIMRMod;
 import net.iakee.oneinventorymanyregrets.config.OIMRConfig;
+import net.iakee.oneinventorymanyregrets.network.DamageIconType;
 import net.iakee.oneinventorymanyregrets.network.OIMRNetworking;
 import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.advancements.triggers.CriteriaTriggers;
@@ -10,20 +11,29 @@ import net.minecraft.core.Holder;
 import net.minecraft.core.NonNullList;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket;
+import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
 import net.minecraft.network.protocol.game.ClientboundSetExperiencePacket;
 import net.minecraft.network.protocol.game.ClientboundSetHealthPacket;
+import net.minecraft.network.protocol.game.ClientboundSetPlayerInventoryPacket;
+import net.minecraft.network.protocol.game.ClientboundSoundPacket;
 import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.players.NameAndId;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.stats.Stats;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.DamageTypeTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.util.Mth;
+import net.minecraft.util.Prediction;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.damagesource.DamageType;
 import net.minecraft.world.damagesource.DamageTypes;
@@ -34,23 +44,33 @@ import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityReference;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.OwnableEntity;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.gossip.GossipType;
 import net.minecraft.world.entity.animal.fox.Fox;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.npc.villager.Villager;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.food.FoodData;
+import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.MerchantMenu;
+import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.item.CrossbowItem;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.ProjectileWeaponItem;
 import net.minecraft.world.item.component.DeathProtection;
 import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.level.gamerules.GameRules;
+import net.minecraft.world.level.portal.TeleportTransition;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.scores.PlayerTeam;
 import org.jspecify.annotations.Nullable;
@@ -60,7 +80,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.function.Predicate;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
@@ -73,6 +95,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Coordinates real-time Hive Mind synchronization across players in each team.
@@ -91,9 +114,19 @@ public final class HiveMindManager {
     private static final Set<UUID> SUPPRESS_DEATH_CHAT = new HashSet<>();
     private static final Map<UUID, CapturedDeathContext> CAPTURED_DEATH_CONTEXTS = new HashMap<>();
     private static final Map<UUID, DamageSource> DYING_DAMAGE_SOURCES = new HashMap<>();
+    private static final Map<UUID, ServerPlayer> ACTIVE_DEATH_LOOT_TARGETS = new HashMap<>();
+    private static final Set<UUID> DEAD_SCREEN_PLAYERS = new HashSet<>();
     private static final Map<UUID, List<PendingDamageContribution>> PENDING_DAMAGE_SOURCES = new HashMap<>();
+    private static final Set<UUID> DEFERRED_HELD_ITEM_SYNCS = new HashSet<>();
+    private static final Map<UUID, Map<Integer, ItemStack>> LAST_SENT_INVENTORY_STACKS = new HashMap<>();
+    private static final Map<UUID, AmmoReservation> ACTIVE_AMMO_RESERVATIONS = new HashMap<>();
+    private static final Set<UUID> PENDING_STOP_USE_SYNCS = new HashSet<>();
+    private static final Set<MobSoundDedupKey> RECENT_MOB_SOUNDS = new HashSet<>();
+    private static long recentMobSoundGameTime = Long.MIN_VALUE;
     private static @Nullable SplashImpactState splashImpact = null;
     private static boolean pendingInvalidAffinityChatWarning = false;
+    private static OIMRConfig.SlotSyncState lastAppliedSlotSync = OIMRConfig.SlotSyncState.ALL_SYNCED;
+    private static boolean lastAppliedSyncEffects = true;
 
     private static final Map<ResourceKey<DamageType>, String> SIMPLE_DEATH_MESSAGE_KEYS = Map.ofEntries(
         Map.entry(DamageTypes.DROWN, "death.oimr.drown"),
@@ -147,9 +180,12 @@ public final class HiveMindManager {
     private static boolean syncingEnvironment = false;
     private static boolean syncingRespawn = false;
     private static boolean syncingKnockback = false;
+    private static boolean syncingGroupTeleport = false;
     private static boolean handlingGroupTotem = false;
     private static int teamMutationDepth = 0;
     private static boolean cascadingDeath = false;
+    private static boolean closingDeathContainer = false;
+    private static final ThreadLocal<List<Mob>> ACTIVE_MOB_SOUND_SOURCES = ThreadLocal.withInitial(ArrayList::new);
 
     private HiveMindManager() {
     }
@@ -169,8 +205,18 @@ public final class HiveMindManager {
         SUPPRESS_DEATH_CHAT.clear();
         CAPTURED_DEATH_CONTEXTS.clear();
         DYING_DAMAGE_SOURCES.clear();
+        ACTIVE_DEATH_LOOT_TARGETS.clear();
+        DEAD_SCREEN_PLAYERS.clear();
         PENDING_DAMAGE_SOURCES.clear();
+        DEFERRED_HELD_ITEM_SYNCS.clear();
+        LAST_SENT_INVENTORY_STACKS.clear();
+        ACTIVE_AMMO_RESERVATIONS.clear();
+        PENDING_STOP_USE_SYNCS.clear();
+        RECENT_MOB_SOUNDS.clear();
+        recentMobSoundGameTime = Long.MIN_VALUE;
         splashImpact = null;
+        lastAppliedSlotSync = OIMRConfig.getSlotSyncState();
+        lastAppliedSyncEffects = OIMRConfig.isSyncEffectsEnabled();
         syncingEffects = false;
         syncingHealth = false;
         syncingAffinityDamage = false;
@@ -182,8 +228,10 @@ public final class HiveMindManager {
         syncingEnvironment = false;
         syncingRespawn = false;
         syncingKnockback = false;
+        syncingGroupTeleport = false;
         handlingGroupTotem = false;
         cascadingDeath = false;
+        closingDeathContainer = false;
         teamMutationDepth = 0;
         HiveMindData.get(server);
     }
@@ -199,8 +247,18 @@ public final class HiveMindManager {
         SUPPRESS_DEATH_CHAT.clear();
         CAPTURED_DEATH_CONTEXTS.clear();
         DYING_DAMAGE_SOURCES.clear();
+        ACTIVE_DEATH_LOOT_TARGETS.clear();
+        DEAD_SCREEN_PLAYERS.clear();
         PENDING_DAMAGE_SOURCES.clear();
+        DEFERRED_HELD_ITEM_SYNCS.clear();
+        LAST_SENT_INVENTORY_STACKS.clear();
+        ACTIVE_AMMO_RESERVATIONS.clear();
+        PENDING_STOP_USE_SYNCS.clear();
+        RECENT_MOB_SOUNDS.clear();
+        recentMobSoundGameTime = Long.MIN_VALUE;
         splashImpact = null;
+        lastAppliedSlotSync = OIMRConfig.SlotSyncState.ALL_SYNCED;
+        lastAppliedSyncEffects = true;
         pendingInvalidAffinityChatWarning = false;
         syncingEffects = false;
         syncingHealth = false;
@@ -213,8 +271,10 @@ public final class HiveMindManager {
         syncingEnvironment = false;
         syncingRespawn = false;
         syncingKnockback = false;
+        syncingGroupTeleport = false;
         handlingGroupTotem = false;
         cascadingDeath = false;
+        closingDeathContainer = false;
         teamMutationDepth = 0;
     }
 
@@ -341,14 +401,18 @@ public final class HiveMindManager {
     }
 
     public static void onPlayerLeave(ServerPlayer player) {
+        releaseAmmoReservation(player, null);
         PENDING_POST_LOAD_CHECKS.remove(player.getUUID());
         DYING_DAMAGE_SOURCES.remove(player.getUUID());
+        DEAD_SCREEN_PLAYERS.remove(player.getUUID());
         HiveMind hive = getHiveForPlayer(player);
         if (hive != null) {
             MinecraftServer server = player.level().getServer();
             if (server != null) {
                 if (OIMRConfig.isFullAffinity() && !player.isDeadOrDying()) {
-                    hive.snapshotEffectsFrom(player.getActiveEffects());
+                    if (OIMRConfig.isSyncEffectsEnabled()) {
+                        hive.snapshotEffectsFrom(player.getActiveEffects());
+                    }
                     hive.setHealth(player.getHealth());
                     hive.setAbsorption(player.getAbsorptionAmount());
                 }
@@ -360,6 +424,7 @@ public final class HiveMindManager {
 
     public static void onPlayerAfterRespawn(ServerPlayer oldPlayer, ServerPlayer newPlayer, boolean alive) {
         detachPlayer(oldPlayer);
+        DEAD_SCREEN_PLAYERS.remove(newPlayer.getUUID());
 
         MinecraftServer server = newPlayer.level().getServer();
         if (server == null) {
@@ -382,6 +447,7 @@ public final class HiveMindManager {
 
         data.setDirty();
         attachPlayer(newPlayer, false, true);
+        newPlayer.level().getChunkSource().chunkMap.move(newPlayer);
     }
 
     private static void attachPlayer(ServerPlayer player, boolean allowInitialCapture, boolean syncVitals) {
@@ -442,15 +508,34 @@ public final class HiveMindManager {
         }
 
         ((HiveLivingEntityAccess) player).oimr$detectEquipmentUpdates();
+        flushPendingSyncDrops(hive, data, player);
 
         if (syncVitals && !player.isDeadOrDying()) {
-            syncVitalsToPlayer(player, server, hiveId, hive, true);
+            syncVitalsToPlayer(player, server, hiveId, hive, true, true);
+        } else {
+            syncUnderwaterOnJoin(player);
         }
 
         player.inventoryMenu.sendAllDataToRemote();
     }
 
+    public static void syncUnderwaterOnJoin(ServerPlayer player) {
+        MinecraftServer server = player.level().getServer();
+        HiveMind hive = getHiveForPlayer(player);
+        if (hive != null && server != null) {
+            boolean underwater = computeHiveUnderwaterState(getAliveMembers(server, hive.getId()));
+            hive.setAnyMemberUnderwater(underwater);
+            OIMRNetworking.syncUnderwaterToPlayer(player, underwater);
+        } else {
+            OIMRNetworking.syncUnderwaterToPlayer(player, false);
+        }
+    }
+
     public static void resyncPlayerFromHive(ServerPlayer player) {
+        resyncPlayerFromHive(player, true);
+    }
+
+    private static void resyncPlayerFromHive(ServerPlayer player, boolean snapshotFromOtherMember) {
         if (!isAttached(player) || player.isDeadOrDying()) {
             return;
         }
@@ -468,13 +553,17 @@ public final class HiveMindManager {
         }
 
         ((HiveLivingEntityAccess) player).oimr$detectEquipmentUpdates();
-        syncVitalsToPlayer(player, server, hiveId, hive, false);
+        player.containerMenu.broadcastChanges();
+        syncVitalsToPlayer(player, server, hiveId, hive, false, snapshotFromOtherMember);
         ((HivePlayerProgressAccess) player).oimr$setEnchantmentSeed(hive.getEnchantmentSeed());
         if (player.containerMenu instanceof HiveEnchantmentMenuAccess enchantMenu
             && enchantMenu.oimr$getSeed() != hive.getEnchantmentSeed()) {
             enchantMenu.oimr$refreshSeed(hive.getEnchantmentSeed());
         }
         player.inventoryMenu.sendAllDataToRemote();
+        if (player.containerMenu != player.inventoryMenu) {
+            player.containerMenu.sendAllDataToRemote();
+        }
     }
 
     private static void syncVitalsToPlayer(
@@ -482,19 +571,24 @@ public final class HiveMindManager {
         MinecraftServer server,
         String hiveId,
         HiveMind hive,
-        boolean forceApplyEffects
+        boolean forceApplyEffects,
+        boolean snapshotFromOtherMember
     ) {
         if (OIMRConfig.isFullAffinity()) {
             ServerPlayer otherAliveRep = null;
-            for (ServerPlayer member : getAliveMembers(server, hiveId)) {
-                if (member != player) {
-                    otherAliveRep = member;
-                    break;
+            if (snapshotFromOtherMember) {
+                for (ServerPlayer member : getAliveMembers(server, hiveId)) {
+                    if (member != player) {
+                        otherAliveRep = member;
+                        break;
+                    }
                 }
             }
 
             if (otherAliveRep != null) {
-                hive.snapshotEffectsFrom(otherAliveRep.getActiveEffects());
+                if (OIMRConfig.isSyncEffectsEnabled()) {
+                    hive.snapshotEffectsFrom(otherAliveRep.getActiveEffects());
+                }
                 hive.setHealth(otherAliveRep.getHealth());
                 hive.setAbsorption(otherAliveRep.getAbsorptionAmount());
             } else if (hive.getHealth() <= 0.0F) {
@@ -502,7 +596,7 @@ public final class HiveMindManager {
                 HiveMindData.get(server).setDirty();
             }
 
-            if (forceApplyEffects || effectsDiffer(player, hive)) {
+            if (OIMRConfig.isSyncEffectsEnabled() && (forceApplyEffects || effectsDiffer(player, hive))) {
                 applyHiveEffectsToPlayer(player, hive);
             }
 
@@ -545,6 +639,8 @@ public final class HiveMindManager {
             player.totalExperience,
             player.experienceLevel
         ));
+        HiveMind currentHive = getHiveForPlayer(player);
+        OIMRNetworking.syncUnderwaterToPlayer(player, currentHive != null && currentHive.isAnyMemberUnderwater());
     }
 
     private static boolean effectsDiffer(ServerPlayer player, HiveMind hive) {
@@ -567,6 +663,13 @@ public final class HiveMindManager {
     private static void detachPlayer(ServerPlayer player) {
         ATTACHED_PLAYERS.remove(player);
         PLAYER_HIVES.remove(player.getUUID());
+        OIMRNetworking.syncUnderwaterToPlayer(player, false);
+        ACTIVE_DEATH_LOOT_TARGETS.remove(player.getUUID());
+        DEAD_SCREEN_PLAYERS.remove(player.getUUID());
+        DEFERRED_HELD_ITEM_SYNCS.remove(player.getUUID());
+        LAST_SENT_INVENTORY_STACKS.remove(player.getUUID());
+        ACTIVE_AMMO_RESERVATIONS.remove(player.getUUID());
+        PENDING_STOP_USE_SYNCS.remove(player.getUUID());
         ((HiveInventoryAccess) player.getInventory())
             .oimr$setItems(NonNullList.withSize(HiveMind.MAIN_INVENTORY_SIZE, ItemStack.EMPTY));
         ((HiveInventoryAccess) player.getEnderChestInventory())
@@ -577,11 +680,190 @@ public final class HiveMindManager {
         ((HiveFoodDataAccess) player).oimr$setFoodData(new FoodData());
     }
 
+    public static void applyBooleanSetting(
+        @Nullable MinecraftServer server,
+        @Nullable ServerPlayer initiator,
+        String key,
+        boolean enabled
+    ) {
+        if (server == null) {
+            OIMRConfig.setBooleanSettingWithTransition(key, enabled, null);
+            return;
+        }
+        OIMRConfig.setBooleanSettingWithTransition(key, enabled, nextSlotSync ->
+            prepareSlotSyncTransition(server, initiator, OIMRConfig.getSlotSyncState(), nextSlotSync)
+        );
+        onConfigChanged(server);
+    }
+
+    public static void reloadConfig(@Nullable MinecraftServer server, @Nullable ServerPlayer initiator) {
+        if (server == null) {
+            OIMRConfig.load();
+            return;
+        }
+        OIMRConfig.reloadWithSlotTransition(nextSlotSync ->
+            prepareSlotSyncTransition(server, initiator, OIMRConfig.getSlotSyncState(), nextSlotSync)
+        );
+        onConfigChanged(server);
+        notifyIfInvalidAffinityReset(server);
+    }
+
+    public static void resetConfigToDefaults(@Nullable MinecraftServer server, @Nullable ServerPlayer initiator) {
+        if (server != null) {
+            prepareSlotSyncTransition(server, initiator, OIMRConfig.getSlotSyncState(), OIMRConfig.SlotSyncState.ALL_SYNCED);
+        }
+        OIMRConfig.resetToDefaults();
+        onConfigChanged(server);
+    }
+
+    private static void prepareSlotSyncTransition(
+        @Nullable MinecraftServer server,
+        @Nullable ServerPlayer initiator,
+        OIMRConfig.SlotSyncState prevState,
+        OIMRConfig.SlotSyncState nextState
+    ) {
+        if (server == null || prevState.equals(nextState)) {
+            return;
+        }
+
+        // Stop active item use on any hand whose sync state is changing (refunds reserved ammo before dropping).
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (!isAttached(player)) {
+                continue;
+            }
+            if (player.isUsingItem()) {
+                InteractionHand usedHand = player.getUsedItemHand();
+                boolean handSyncChanged;
+                if (usedHand == InteractionHand.MAIN_HAND) {
+                    int selectedSlot = player.getInventory().getSelectedSlot();
+                    handSyncChanged = prevState.isHotbarSlotSynced(selectedSlot) != nextState.isHotbarSlotSynced(selectedSlot);
+                } else {
+                    handSyncChanged = prevState.isEquipmentSlotSynced(EquipmentSlot.OFFHAND) != nextState.isEquipmentSlotSynced(EquipmentSlot.OFFHAND);
+                }
+                if (handSyncChanged) {
+                    player.stopUsingItem();
+                }
+            }
+            DEFERRED_HELD_ITEM_SYNCS.remove(player.getUUID());
+            LAST_SENT_INVENTORY_STACKS.remove(player.getUUID());
+        }
+
+        List<Integer> unsyncingHotbarSlots = new ArrayList<>();
+        for (int slot = 0; slot < PersonalInventoryState.HOTBAR_SIZE; slot++) {
+            if (prevState.isHotbarSlotSynced(slot) && !nextState.isHotbarSlotSynced(slot)) {
+                unsyncingHotbarSlots.add(slot);
+            }
+        }
+        List<EquipmentSlot> unsyncingEquipSlots = new ArrayList<>();
+        for (EquipmentSlot slot : new EquipmentSlot[]{
+            EquipmentSlot.OFFHAND,
+            EquipmentSlot.HEAD,
+            EquipmentSlot.CHEST,
+            EquipmentSlot.LEGS,
+            EquipmentSlot.FEET
+        }) {
+            if (prevState.isEquipmentSlotSynced(slot) && !nextState.isEquipmentSlotSynced(slot)) {
+                unsyncingEquipSlots.add(slot);
+            }
+        }
+
+        if (!unsyncingHotbarSlots.isEmpty() || !unsyncingEquipSlots.isEmpty()) {
+            HiveMindData data = HiveMindData.get(server);
+            for (HiveMind hive : data.getAll()) {
+                List<ItemStack> toDrop = new ArrayList<>();
+                for (int slot : unsyncingHotbarSlots) {
+                    ItemStack stack = hive.getItems().get(slot);
+                    if (!stack.isEmpty()) {
+                        toDrop.add(stack.copy());
+                        hive.getItems().set(slot, ItemStack.EMPTY);
+                    }
+                }
+                for (EquipmentSlot equipSlot : unsyncingEquipSlots) {
+                    ItemStack stack = hive.getEquipmentMap().remove(equipSlot);
+                    if (stack != null && !stack.isEmpty()) {
+                        toDrop.add(stack.copy());
+                    }
+                }
+                if (!toDrop.isEmpty()) {
+                    data.setDirty();
+                    ServerPlayer dropTarget = resolveSlotSyncDropTarget(server, hive.getId(), initiator);
+                    for (ItemStack stack : toDrop) {
+                        if (dropTarget != null) {
+                            dropTarget.drop(stack, false, Prediction.SERVER_ONLY);
+                        } else {
+                            hive.addPendingSyncDrop(stack);
+                        }
+                    }
+                }
+            }
+        }
+
+        lastAppliedSlotSync = nextState;
+    }
+
+    private static @Nullable ServerPlayer resolveSlotSyncDropTarget(
+        MinecraftServer server,
+        String hiveId,
+        @Nullable ServerPlayer initiator
+    ) {
+        if (initiator != null
+            && isAttached(initiator)
+            && !initiator.isRemoved()
+            && hiveId.equals(PLAYER_HIVES.get(initiator.getUUID()))) {
+            return initiator;
+        }
+        ServerPlayer best = null;
+        for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
+            if (member.isRemoved()) {
+                continue;
+            }
+            if (best == null || compareDropPriority(member, best) < 0) {
+                best = member;
+            }
+        }
+        return best;
+    }
+
+    private static int compareDropPriority(ServerPlayer a, ServerPlayer b) {
+        boolean aPreferred = !a.isDeadOrDying() && !a.isSpectator();
+        boolean bPreferred = !b.isDeadOrDying() && !b.isSpectator();
+        if (aPreferred != bPreferred) {
+            return aPreferred ? -1 : 1;
+        }
+        return a.getUUID().compareTo(b.getUUID());
+    }
+
+    private static void flushPendingSyncDrops(HiveMind hive, HiveMindData data, ServerPlayer player) {
+        List<ItemStack> pending = hive.drainPendingSyncDrops();
+        if (pending.isEmpty()) {
+            return;
+        }
+        data.setDirty();
+        for (ItemStack stack : pending) {
+            if (!stack.isEmpty()) {
+                player.drop(stack, false, Prediction.SERVER_ONLY);
+            }
+        }
+    }
+
     public static void onConfigChanged(@Nullable MinecraftServer server) {
         if (server == null) {
             return;
         }
+        OIMRConfig.SlotSyncState currentSlotSync = OIMRConfig.getSlotSyncState();
+        if (!lastAppliedSlotSync.equals(currentSlotSync)) {
+            prepareSlotSyncTransition(server, null, lastAppliedSlotSync, currentSlotSync);
+        }
         HiveMindData data = HiveMindData.get(server);
+        boolean currentSyncEffects = OIMRConfig.isSyncEffectsEnabled();
+        if (lastAppliedSyncEffects && !currentSyncEffects) {
+            for (HiveMind hive : data.getAll()) {
+                hive.getEffects().clear();
+                hive.clearAllEffectRemainders();
+                hive.clearPrimaryEffectTickers();
+            }
+        }
+        lastAppliedSyncEffects = currentSyncEffects;
         if (OIMRConfig.isFullAffinity()) {
             PENDING_DAMAGE_SOURCES.clear();
             for (HiveMind hive : data.getAll()) {
@@ -589,19 +871,31 @@ public final class HiveMindManager {
                 List<ServerPlayer> alive = getAliveMembers(server, hive.getId());
                 if (!alive.isEmpty()) {
                     ServerPlayer rep = alive.getFirst();
-                    hive.snapshotEffectsFrom(rep.getActiveEffects());
+                    if (OIMRConfig.isSyncEffectsEnabled()) {
+                        hive.snapshotEffectsFrom(rep.getActiveEffects());
+                    }
                     hive.setHealth(rep.getHealth());
                     hive.setAbsorption(rep.getAbsorptionAmount());
                 }
             }
         }
+        for (HiveMind hive : data.getAll()) {
+            List<ServerPlayer> alive = getAliveMembers(server, hive.getId());
+            hive.setAnyMemberUnderwater(computeHiveUnderwaterState(alive));
+        }
         for (ServerPlayer player : server.getPlayerList().getPlayers()) {
             if (isAttached(player)) {
-                resyncPlayerFromHive(player);
+                resyncPlayerFromHive(player, false);
             }
         }
         data.setDirty();
         OIMRNetworking.syncToAll(server);
+        for (HiveMind hive : data.getAll()) {
+            boolean underwater = hive.isAnyMemberUnderwater();
+            for (ServerPlayer member : getOnlineMembers(server, hive.getId())) {
+                OIMRNetworking.syncUnderwaterToPlayer(member, underwater);
+            }
+        }
     }
 
     private static void applyHiveEffectsToPlayer(ServerPlayer player, HiveMind hive) {
@@ -643,6 +937,10 @@ public final class HiveMindManager {
             }
             String expectedHiveId = getHiveId(player);
             if (!expectedHiveId.equals(currentHiveId)) {
+                releaseAmmoReservation(player, null);
+                if (player.isUsingItem()) {
+                    player.stopUsingItem();
+                }
                 HiveMind oldHive = HiveMindData.get(server).getIfPresent(currentHiveId);
                 if (oldHive != null) {
                     oldHive.clearPlayerRemainders(player.getUUID());
@@ -672,6 +970,412 @@ public final class HiveMindManager {
         for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
             member.containerMenu.broadcastChanges();
             ((HiveLivingEntityAccess) member).oimr$detectEquipmentUpdates();
+        }
+    }
+
+    public static void onPlayerStartUsingItem(ServerPlayer player, InteractionHand hand, ItemStack usedItem) {
+        if (!isAttached(player)
+            || player.isDeadOrDying()
+            || player.hasInfiniteMaterials()
+            || usedItem.isEmpty()
+            || !(usedItem.getItem() instanceof ProjectileWeaponItem)
+            || CrossbowItem.isCharged(usedItem)
+            || ACTIVE_AMMO_RESERVATIONS.containsKey(player.getUUID())) {
+            return;
+        }
+        int sourceSlot = findProjectileSourceSlot(player, usedItem);
+        if (sourceSlot == Inventory.NOT_FOUND_INDEX) {
+            return;
+        }
+        ItemStack sourceStack = getSlotStack(player, sourceSlot);
+        if (sourceStack.isEmpty()) {
+            return;
+        }
+        ItemStack reserved = sourceStack.split(1);
+        if (sourceStack.isEmpty()) {
+            setSlotStack(player, sourceSlot, ItemStack.EMPTY);
+        }
+        String hiveId = PLAYER_HIVES.get(player.getUUID());
+        ACTIVE_AMMO_RESERVATIONS.put(
+            player.getUUID(),
+            new AmmoReservation(player.getUUID(), hiveId, hand, usedItem.copy(), reserved, sourceSlot)
+        );
+        broadcastInventoryChanges(player);
+    }
+
+    public static void onPlayerStopUsingItem(ServerPlayer player) {
+        boolean released = releaseAmmoReservation(player, null);
+        if (released) {
+            PENDING_STOP_USE_SYNCS.add(player.getUUID());
+        }
+    }
+
+    public static void onAfterPlayerStopUsingItem(ServerPlayer player) {
+        if (PENDING_STOP_USE_SYNCS.remove(player.getUUID()) && isAttached(player)) {
+            broadcastInventoryChanges(player);
+            player.inventoryMenu.sendAllDataToRemote();
+            if (player.containerMenu != player.inventoryMenu) {
+                player.containerMenu.sendAllDataToRemote();
+            }
+        }
+    }
+
+    public static void onCrossbowAmmoLoaded(ServerPlayer player) {
+        if (!isAttached(player)) {
+            return;
+        }
+        if (releaseAmmoReservation(player, null)) {
+            PENDING_STOP_USE_SYNCS.add(player.getUUID());
+            broadcastInventoryChanges(player);
+        }
+    }
+
+    public static ItemStack getReservedProjectile(ServerPlayer player, ItemStack heldWeapon) {
+        if (!isAttached(player) || !player.isUsingItem() || heldWeapon.isEmpty()) {
+            return ItemStack.EMPTY;
+        }
+        AmmoReservation reservation = ACTIVE_AMMO_RESERVATIONS.get(player.getUUID());
+        if (reservation == null || reservation.reservedStack().isEmpty()) {
+            return ItemStack.EMPTY;
+        }
+        ItemStack activeUse = player.getUseItem();
+        if (!ItemStack.isSameItem(activeUse, heldWeapon) || !ItemStack.isSameItem(reservation.weaponSnapshot(), heldWeapon)) {
+            return ItemStack.EMPTY;
+        }
+        return reservation.reservedStack();
+    }
+
+    public static boolean shouldRejectStaleOrEmptyUseItem(ServerPlayer player, ItemStack itemStack, InteractionHand hand) {
+        if (!isAttached(player)) {
+            return false;
+        }
+        ItemStack currentHand = player.getItemInHand(hand);
+        return itemStack.isEmpty() || currentHand.isEmpty();
+    }
+
+    public static void onAfterServerPlayerUseItem(ServerPlayer player, InteractionHand hand, InteractionResult result) {
+        if (!isAttached(player) || player.isUsingItem()) {
+            return;
+        }
+        if (result.consumesAction() || player.getItemInHand(hand).isEmpty()) {
+            broadcastInventoryChanges(player);
+        }
+    }
+
+    private static boolean releaseAmmoReservation(ServerPlayer player, @Nullable ServerPlayer dropOverride) {
+        AmmoReservation reservation = ACTIVE_AMMO_RESERVATIONS.remove(player.getUUID());
+        if (reservation == null) {
+            return false;
+        }
+        ItemStack leftover = reservation.reservedStack();
+        if (!leftover.isEmpty()) {
+            returnReservedAmmoToPlayer(player, leftover.copyAndClear(), reservation.sourceSlot(), dropOverride);
+        }
+        return true;
+    }
+
+    private static void returnReservedAmmoToPlayer(
+        ServerPlayer player,
+        ItemStack toReturn,
+        int preferredSlot,
+        @Nullable ServerPlayer dropOverride
+    ) {
+        if (toReturn.isEmpty()) {
+            return;
+        }
+        if (preferredSlot == Inventory.SLOT_OFFHAND) {
+            ItemStack offhand = player.getOffhandItem();
+            if (offhand.isEmpty()) {
+                player.setItemSlot(EquipmentSlot.OFFHAND, toReturn.copyAndClear());
+                return;
+            }
+            if (ItemStack.isSameItemSameComponents(offhand, toReturn) && offhand.getCount() < offhand.getMaxStackSize()) {
+                int move = Math.min(offhand.getMaxStackSize() - offhand.getCount(), toReturn.getCount());
+                offhand.grow(move);
+                toReturn.shrink(move);
+            }
+        }
+        if (!toReturn.isEmpty() && preferredSlot >= 0 && preferredSlot < Inventory.INVENTORY_SIZE) {
+            ItemStack current = player.getInventory().getItem(preferredSlot);
+            if (current.isEmpty()
+                || (ItemStack.isSameItemSameComponents(current, toReturn)
+                    && current.getCount() < current.getMaxStackSize())) {
+                player.getInventory().add(preferredSlot, toReturn);
+            }
+        }
+        if (!toReturn.isEmpty()) {
+            player.getInventory().add(toReturn);
+        }
+        if (!toReturn.isEmpty()) {
+            ServerPlayer dropTarget = dropOverride != null && !dropOverride.isRemoved() ? dropOverride : player;
+            dropTarget.drop(toReturn.copyAndClear(), false, Prediction.SERVER_ONLY);
+        }
+    }
+
+    private static int findProjectileSourceSlot(ServerPlayer player, ItemStack heldWeapon) {
+        if (!(heldWeapon.getItem() instanceof ProjectileWeaponItem weaponItem)) {
+            return Inventory.NOT_FOUND_INDEX;
+        }
+        Predicate<ItemStack> supportedHeld = weaponItem.getSupportedHeldProjectiles();
+        if (supportedHeld.test(player.getOffhandItem())) {
+            return Inventory.SLOT_OFFHAND;
+        }
+        int selectedSlot = player.getInventory().getSelectedSlot();
+        if (supportedHeld.test(player.getMainHandItem())) {
+            return selectedSlot;
+        }
+        Predicate<ItemStack> allSupported = weaponItem.getAllSupportedProjectiles();
+        Inventory inventory = player.getInventory();
+        for (int i = 0; i < inventory.getContainerSize(); i++) {
+            if (allSupported.test(inventory.getItem(i))) {
+                return i;
+            }
+        }
+        return Inventory.NOT_FOUND_INDEX;
+    }
+
+    private static ItemStack getSlotStack(ServerPlayer player, int slot) {
+        if (slot == Inventory.SLOT_OFFHAND) {
+            return player.getOffhandItem();
+        }
+        return player.getInventory().getItem(slot);
+    }
+
+    private static void setSlotStack(ServerPlayer player, int slot, ItemStack stack) {
+        if (slot == Inventory.SLOT_OFFHAND) {
+            player.setItemSlot(EquipmentSlot.OFFHAND, stack);
+        } else {
+            player.getInventory().setItem(slot, stack);
+        }
+    }
+
+    private static ItemStack maskReservedAmmoOutboundStack(ServerPlayer player, int inventorySlot, ItemStack outboundStack) {
+        AmmoReservation reservation = ACTIVE_AMMO_RESERVATIONS.get(player.getUUID());
+        if (reservation == null
+            || reservation.reservedStack().isEmpty()
+            || reservation.sourceSlot() != inventorySlot) {
+            return outboundStack;
+        }
+        ItemStack reserved = reservation.reservedStack();
+        if (outboundStack.isEmpty()) {
+            return reserved.copy();
+        }
+        if (ItemStack.isSameItemSameComponents(outboundStack, reserved)) {
+            int combined = Math.min(outboundStack.getMaxStackSize(), outboundStack.getCount() + reserved.getCount());
+            return outboundStack.copyWithCount(combined);
+        }
+        return outboundStack;
+    }
+
+    /**
+     * Prevents a durability/component update produced by one hive member from replacing another
+     * member's active client-side hand stack halfway through mining or continuous item use.
+     * The canonical stack remains the one stored by the server; only its outbound presentation is
+     * delayed. Broken/empty stacks are never delayed, so an exhausted shared item cannot become a
+     * usable ghost item.
+     */
+    public static boolean shouldDeferSharedHeldItemUpdate(ServerPlayer player, Packet<?> packet) {
+        return filterOrDeferSharedHeldItemUpdate(player, packet) == null;
+    }
+
+    /**
+     * Prevents a durability/component/count update produced by one hive member from replacing
+     * another member's active client-side hand stack halfway through mining or continuous item use.
+     * The canonical stack remains the one stored by the server; only its outbound presentation is
+     * delayed. Broken, empty, or replaced-with-different-item stacks are sent immediately so an
+     * exhausted or swapped shared item cannot become a usable ghost item.
+     *
+     * @return {@code null} to drop/defer the packet, a replacement packet with the protected slot
+     *     masked, or {@code packet} unchanged.
+     */
+    public static @Nullable Packet<?> filterOrDeferSharedHeldItemUpdate(ServerPlayer player, Packet<?> packet) {
+        if (!isAttached(player) || player.isDeadOrDying()) {
+            return packet;
+        }
+
+        if (packet instanceof ClientboundSetPlayerInventoryPacket inventoryPacket) {
+            int inventorySlot = inventoryPacket.slot();
+            ItemStack outboundStack = inventoryPacket.contents();
+            if (shouldMaskOutboundSlot(player, inventorySlot, outboundStack)) {
+                DEFERRED_HELD_ITEM_SYNCS.add(player.getUUID());
+                return null;
+            }
+            ItemStack adjustedStack = maskReservedAmmoOutboundStack(player, inventorySlot, outboundStack);
+            recordLastSentSlotStack(player, inventorySlot, adjustedStack);
+            if (adjustedStack != outboundStack) {
+                return new ClientboundSetPlayerInventoryPacket(inventorySlot, adjustedStack);
+            }
+            return packet;
+        }
+
+        if (packet instanceof ClientboundContainerSetSlotPacket containerPacket) {
+            int inventorySlot = resolvePlayerInventorySlot(player, containerPacket);
+            if (inventorySlot == Inventory.NOT_FOUND_INDEX) {
+                return packet;
+            }
+            ItemStack outboundStack = containerPacket.getItem();
+            if (shouldMaskOutboundSlot(player, inventorySlot, outboundStack)) {
+                DEFERRED_HELD_ITEM_SYNCS.add(player.getUUID());
+                return null;
+            }
+            ItemStack adjustedStack = maskReservedAmmoOutboundStack(player, inventorySlot, outboundStack);
+            recordLastSentSlotStack(player, inventorySlot, adjustedStack);
+            if (adjustedStack != outboundStack) {
+                return new ClientboundContainerSetSlotPacket(
+                    containerPacket.getContainerId(),
+                    containerPacket.getStateId(),
+                    containerPacket.getSlot(),
+                    adjustedStack
+                );
+            }
+            return packet;
+        }
+
+        if (packet instanceof ClientboundContainerSetContentPacket contentPacket) {
+            AbstractContainerMenu menu = resolveMenuForContainerId(player, contentPacket.containerId());
+            if (menu == null) {
+                return packet;
+            }
+            List<ItemStack> items = contentPacket.items();
+            int limit = Math.min(items.size(), menu.slots.size());
+            List<ItemStack> maskedItems = null;
+            for (int i = 0; i < limit; i++) {
+                Slot menuSlot = menu.getSlot(i);
+                if (menuSlot.container != player.getInventory()) {
+                    continue;
+                }
+                int inventorySlot = menuSlot.getContainerSlot();
+                ItemStack outboundStack = items.get(i);
+                if (shouldMaskOutboundSlot(player, inventorySlot, outboundStack)) {
+                    if (maskedItems == null) {
+                        maskedItems = new ArrayList<>(items);
+                    }
+                    ItemStack authoritativeStack = player.getInventory().getItem(inventorySlot);
+                    maskedItems.set(i, getLastSentSlotStack(player, inventorySlot, authoritativeStack).copy());
+                    DEFERRED_HELD_ITEM_SYNCS.add(player.getUUID());
+                } else {
+                    ItemStack adjustedStack = maskReservedAmmoOutboundStack(player, inventorySlot, outboundStack);
+                    if (adjustedStack != outboundStack) {
+                        if (maskedItems == null) {
+                            maskedItems = new ArrayList<>(items);
+                        }
+                        maskedItems.set(i, adjustedStack);
+                    }
+                    recordLastSentSlotStack(player, inventorySlot, adjustedStack);
+                }
+            }
+            if (maskedItems != null) {
+                return new ClientboundContainerSetContentPacket(
+                    contentPacket.containerId(),
+                    contentPacket.stateId(),
+                    maskedItems,
+                    contentPacket.carriedItem()
+                );
+            }
+        }
+
+        return packet;
+    }
+
+    private static boolean shouldMaskOutboundSlot(ServerPlayer player, int inventorySlot, ItemStack outboundStack) {
+        if (!isProtectedSharedHandSlot(player, inventorySlot)) {
+            return false;
+        }
+        ItemStack authoritativeStack = player.getInventory().getItem(inventorySlot);
+        ItemStack lastClientStack = getLastSentSlotStack(player, inventorySlot, authoritativeStack);
+        if (!isAuthoritativelyUsable(authoritativeStack)
+            || !isAuthoritativelyUsable(outboundStack)
+            || !ItemStack.isSameItem(lastClientStack, authoritativeStack)) {
+            DEFERRED_HELD_ITEM_SYNCS.remove(player.getUUID());
+            return false;
+        }
+        return true;
+    }
+
+    private static @Nullable AbstractContainerMenu resolveMenuForContainerId(ServerPlayer player, int containerId) {
+        if (containerId == player.containerMenu.containerId) {
+            return player.containerMenu;
+        }
+        if (containerId == player.inventoryMenu.containerId) {
+            return player.inventoryMenu;
+        }
+        return null;
+    }
+
+    private static void recordLastSentSlotStack(ServerPlayer player, int inventorySlot, ItemStack stack) {
+        if (inventorySlot < 0) {
+            return;
+        }
+        LAST_SENT_INVENTORY_STACKS
+            .computeIfAbsent(player.getUUID(), ignored -> new HashMap<>())
+            .put(inventorySlot, stack.copy());
+    }
+
+    private static ItemStack getLastSentSlotStack(ServerPlayer player, int inventorySlot, ItemStack fallback) {
+        Map<Integer, ItemStack> slots = LAST_SENT_INVENTORY_STACKS.get(player.getUUID());
+        if (slots == null) {
+            return fallback;
+        }
+        ItemStack recorded = slots.get(inventorySlot);
+        return recorded != null ? recorded : fallback;
+    }
+
+    private static int resolvePlayerInventorySlot(
+        ServerPlayer player,
+        ClientboundContainerSetSlotPacket packet
+    ) {
+        AbstractContainerMenu menu = resolveMenuForContainerId(player, packet.getContainerId());
+        if (menu == null || !menu.isValidSlotIndex(packet.getSlot())) {
+            return Inventory.NOT_FOUND_INDEX;
+        }
+        Slot menuSlot = menu.getSlot(packet.getSlot());
+        return menuSlot.container == player.getInventory()
+            ? menuSlot.getContainerSlot()
+            : Inventory.NOT_FOUND_INDEX;
+    }
+
+    private static boolean isProtectedSharedHandSlot(ServerPlayer player, int inventorySlot) {
+        boolean mining = ((HiveServerPlayerGameModeAccess) player.gameMode).oimr$isDestroyingOrDelayedBlock();
+        int selectedSlot = player.getInventory().getSelectedSlot();
+        if (mining && inventorySlot == selectedSlot && OIMRConfig.isHotbarSlotSynced(inventorySlot)) {
+            return true;
+        }
+        if (!player.isUsingItem()) {
+            return false;
+        }
+        if (player.getUsedItemHand() == InteractionHand.MAIN_HAND) {
+            return inventorySlot == selectedSlot && OIMRConfig.isHotbarSlotSynced(inventorySlot);
+        }
+        return inventorySlot == Inventory.SLOT_OFFHAND
+            && OIMRConfig.isEquipmentSlotSynced(EquipmentSlot.OFFHAND);
+    }
+
+    private static boolean isAuthoritativelyUsable(ItemStack stack) {
+        return !stack.isEmpty() && !stack.isBroken();
+    }
+
+    private static void flushDeferredHeldItemSyncs(MinecraftServer server) {
+        if (DEFERRED_HELD_ITEM_SYNCS.isEmpty()) {
+            return;
+        }
+        Iterator<UUID> iterator = DEFERRED_HELD_ITEM_SYNCS.iterator();
+        while (iterator.hasNext()) {
+            UUID playerId = iterator.next();
+            ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+            if (player == null || !isAttached(player)) {
+                iterator.remove();
+                continue;
+            }
+            if (player.isUsingItem()
+                || ((HiveServerPlayerGameModeAccess) player.gameMode).oimr$isDestroyingOrDelayedBlock()) {
+                continue;
+            }
+
+            iterator.remove();
+            player.containerMenu.sendAllDataToRemote();
+            if (player.containerMenu != player.inventoryMenu) {
+                player.inventoryMenu.sendAllDataToRemote();
+            }
         }
     }
 
@@ -722,11 +1426,34 @@ public final class HiveMindManager {
             if (!aliveMembers.isEmpty() && OIMRConfig.isFullAffinity()) {
                 tickHiveEnvironment(hive, aliveMembers, gameTime, data);
                 ServerPlayer rep = aliveMembers.getFirst();
-                hive.snapshotEffectsFrom(rep.getActiveEffects());
+                if (OIMRConfig.isSyncEffectsEnabled()) {
+                    hive.snapshotEffectsFrom(rep.getActiveEffects());
+                }
                 hive.setHealth(rep.getHealth());
                 hive.setAbsorption(rep.getAbsorptionAmount());
             }
+
+            boolean underwaterNow = computeHiveUnderwaterState(aliveMembers);
+            if (underwaterNow != hive.isAnyMemberUnderwater()) {
+                hive.setAnyMemberUnderwater(underwaterNow);
+                for (ServerPlayer member : members) {
+                    OIMRNetworking.syncUnderwaterToPlayer(member, underwaterNow);
+                }
+            }
         }
+        flushDeferredHeldItemSyncs(server);
+    }
+
+    private static boolean computeHiveUnderwaterState(List<ServerPlayer> aliveMembers) {
+        if (!OIMRConfig.isUnderwaterMuffleEnabled() || OIMRConfig.getAffinityPercent() <= 0) {
+            return false;
+        }
+        for (ServerPlayer member : aliveMembers) {
+            if (!member.isSpectator() && member.isEyeInFluid(FluidTags.WATER)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void tickHiveEnvironment(
@@ -756,6 +1483,19 @@ public final class HiveMindManager {
         int prevAir = hive.getAirSupply();
         if (drowner != null) {
             int nextAir = ((HiveLivingEntityAccess) drowner).oimr$decreaseAirSupply(prevAir);
+            int maxAir = Math.max(1, drowner.getMaxAirSupply());
+            int prevBubbles = airSupplyToFullBubbles(prevAir, maxAir);
+            int nextBubbles = airSupplyToFullBubbles(nextAir, maxAir);
+            int drainedBubbles = prevBubbles - nextBubbles;
+            if (drainedBubbles > 0) {
+                MinecraftServer server = drowner.level().getServer();
+                if (server != null) {
+                    String drownerName = drowner.getGameProfile().name();
+                    for (ServerPlayer member : getOnlineMembers(server, hive.getId())) {
+                        OIMRNetworking.sendAirFeed(member, drownerName, drainedBubbles);
+                    }
+                }
+            }
             if (nextAir <= -20) {
                 nextAir = 0;
                 drowner.level().broadcastEntityEvent(drowner, (byte) 67);
@@ -780,16 +1520,15 @@ public final class HiveMindManager {
             for (ServerPlayer member : aliveMembers) {
                 if (!member.fireImmune()) {
                     allFireImmune = false;
-                    if (isVitalHazardTarget(member)) {
+                    if (burner == null && isVitalHazardTarget(member)) {
                         burner = member;
-                        break;
                     }
                 }
             }
             if (allFireImmune) {
                 hive.setRemainingFireTicks(0);
             } else {
-                if (burner != null && prevFire % 20 == 0 && !burner.isInLava()) {
+                if (burner != null && prevFire % 20 == 0) {
                     burner.hurtServer(burner.level(), burner.damageSources().onFire(), 1.0F);
                 }
                 hive.setRemainingFireTicks(prevFire - 1);
@@ -825,6 +1564,11 @@ public final class HiveMindManager {
         }
 
         syncEnvironmentToMembers(hive, aliveMembers);
+    }
+
+    private static int airSupplyToFullBubbles(int airSupply, int maxAir) {
+        int clamped = Mth.clamp(airSupply, 0, maxAir);
+        return Math.max(0, Mth.ceil((float) (clamped - 2) * 10.0F / (float) maxAir));
     }
 
     private static void syncEnvironmentToMembers(HiveMind hive, List<ServerPlayer> aliveMembers) {
@@ -990,6 +1734,7 @@ public final class HiveMindManager {
     public static boolean captureSplashPotionEffect(LivingEntity target, MobEffectInstance effect) {
         if (splashImpact == null
             || syncingEffects
+            || !OIMRConfig.isSyncEffectsEnabled()
             || !OIMRConfig.isFullAffinity()
             || !(target instanceof ServerPlayer player)
             || !isAttached(player)
@@ -1140,8 +1885,49 @@ public final class HiveMindManager {
         return candidate.getDuration() > current.getDuration();
     }
 
+    public static void onEffectDowngraded(LivingEntity entity, MobEffectInstance effect) {
+        if (syncingEffects
+            || !OIMRConfig.isSyncEffectsEnabled()
+            || !OIMRConfig.isFullAffinity()
+            || !(entity instanceof ServerPlayer player)
+            || !isAttached(player)
+            || player.isDeadOrDying()) {
+            return;
+        }
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return;
+        }
+        String hiveId = PLAYER_HIVES.get(player.getUUID());
+        HiveMind hive = HiveMindData.get(server).getIfPresent(hiveId);
+        if (hive == null) {
+            return;
+        }
+
+        hive.putEffect(effect);
+        HiveMindData.get(server).setDirty();
+
+        syncingEffects = true;
+        try {
+            for (ServerPlayer other : getAliveMembers(server, hiveId)) {
+                if (other == player) {
+                    continue;
+                }
+                MobEffectInstance copy = new MobEffectInstance(effect);
+                other.forceAddEffect(copy, null);
+                copy.onEffectStarted(other);
+            }
+        } finally {
+            syncingEffects = false;
+        }
+        if (MobEffects.HERO_OF_THE_VILLAGE.equals(effect.getEffect())) {
+            refreshOpenMerchantPricesForHive(server, hiveId);
+        }
+    }
+
     public static void onEffectAddedOrUpdated(LivingEntity entity, MobEffectInstance effect, Entity source) {
         if (syncingEffects
+            || !OIMRConfig.isSyncEffectsEnabled()
             || (splashImpact != null && OIMRConfig.isFullAffinity())
             || !(entity instanceof ServerPlayer player)
             || !isAttached(player)
@@ -1386,7 +2172,7 @@ public final class HiveMindManager {
     }
 
     public static void onEffectsRemoved(LivingEntity entity, Collection<MobEffectInstance> removedEffects) {
-        if (syncingEffects || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
+        if (syncingEffects || !OIMRConfig.isSyncEffectsEnabled() || !(entity instanceof ServerPlayer player) || !isAttached(player) || player.isDeadOrDying()) {
             return;
         }
         MinecraftServer server = player.level().getServer();
@@ -1441,7 +2227,7 @@ public final class HiveMindManager {
             return true;
         }
         boolean alwaysDeduplicated = effectHolder.is(MobEffects.SATURATION);
-        if (!alwaysDeduplicated && !OIMRConfig.isFullAffinity()) {
+        if (!alwaysDeduplicated && (!OIMRConfig.isFullAffinity() || !OIMRConfig.isSyncEffectsEnabled())) {
             return true;
         }
         if (!alwaysDeduplicated
@@ -1477,7 +2263,7 @@ public final class HiveMindManager {
     }
 
     public static int beginPeriodicEffectTick(LivingEntity target, Holder<MobEffect> effectHolder) {
-        if (OIMRConfig.isFullAffinity() || !isAttachedServerPlayer(target)) {
+        if (OIMRConfig.isFullAffinity() || !OIMRConfig.isSyncEffectsEnabled() || !isAttachedServerPlayer(target)) {
             return 0;
         }
         int flags = 0;
@@ -1502,7 +2288,7 @@ public final class HiveMindManager {
     }
 
     public static double getInfestedChanceScale(LivingEntity entity) {
-        if (OIMRConfig.isFullAffinity() || !(entity instanceof ServerPlayer player) || !isAttached(player)) {
+        if (OIMRConfig.isFullAffinity() || !OIMRConfig.isSyncEffectsEnabled() || !(entity instanceof ServerPlayer player) || !isAttached(player)) {
             return 1.0D;
         }
         HiveMind hive = getHiveForPlayer(player);
@@ -1543,6 +2329,155 @@ public final class HiveMindManager {
             return true;
         }
         return hive.tryClaimFoodTick(server.overworld().getGameTime());
+    }
+
+    public static boolean isPrimaryPeacefulRegenMember(ServerPlayer player) {
+        if (!isAttached(player) || player.isDeadOrDying()) {
+            return false;
+        }
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return true;
+        }
+        String hiveId = PLAYER_HIVES.get(player.getUUID());
+        if (hiveId == null) {
+            return true;
+        }
+        List<ServerPlayer> alive = getAliveMembers(server, hiveId);
+        if (alive.isEmpty()) {
+            return false;
+        }
+        List<ServerPlayer> vitalTargets = new ArrayList<>();
+        for (ServerPlayer member : alive) {
+            if (isVitalHazardTarget(member)) {
+                vitalTargets.add(member);
+            }
+        }
+        List<ServerPlayer> pool = vitalTargets.isEmpty() ? alive : vitalTargets;
+        ServerPlayer chosen = null;
+        for (ServerPlayer candidate : pool) {
+            if (chosen == null || candidate.getUUID().compareTo(chosen.getUUID()) < 0) {
+                chosen = candidate;
+            }
+        }
+        return chosen == player;
+    }
+
+    public static boolean shouldRunPeacefulRegen(ServerPlayer player) {
+        if (!isAttached(player)) {
+            return true;
+        }
+        if (player.isDeadOrDying()) {
+            return false;
+        }
+        if (OIMRConfig.isFullAffinity()) {
+            return isPrimaryPeacefulRegenMember(player);
+        }
+        return true;
+    }
+
+    public static boolean beginPeacefulRegenTick(ServerPlayer player) {
+        if (OIMRConfig.isFullAffinity() || !isAttached(player) || suppressAffinityVitalsCascade) {
+            return false;
+        }
+        suppressAffinityVitalsCascade = true;
+        return true;
+    }
+
+    public static void endPeacefulRegenTick(boolean restoreSuppress) {
+        if (restoreSuppress) {
+            suppressAffinityVitalsCascade = false;
+        }
+    }
+
+    public static boolean shouldApplyPeacefulFoodRegen(ServerPlayer player) {
+        if (!isAttached(player)) {
+            return true;
+        }
+        return isPrimaryPeacefulRegenMember(player);
+    }
+
+    private static boolean isSharedEnvFireSource(DamageSource source) {
+        return source.is(DamageTypes.IN_FIRE)
+            || source.is(DamageTypes.ON_FIRE)
+            || source.is(DamageTypes.CAMPFIRE)
+            || source.is(DamageTypes.HOT_FLOOR)
+            || source.is(DamageTypes.SULFUR_CUBE_HOT);
+    }
+
+    public static boolean shouldSuppressDuplicateEnvFireHurt(LivingEntity entity, DamageSource source, float damage) {
+        if (cascadingDeath
+            || syncingAffinityDamage
+            || !OIMRConfig.isFullAffinity()
+            || !isSharedEnvFireSource(source)
+            || !(entity instanceof ServerPlayer player)
+            || !isAttached(player)) {
+            return false;
+        }
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return false;
+        }
+        HiveMind hive = getHiveForPlayer(player);
+        if (hive == null) {
+            return false;
+        }
+        long gameTime = server.overworld().getGameTime();
+        long elapsed = gameTime - hive.getLastEnvFireHurtTick();
+        return elapsed >= 0L && elapsed < 10L && damage <= hive.getLastEnvFireHurtDamage();
+    }
+
+    public static float adjustEnvFireDamage(LivingEntity entity, DamageSource source, float damage) {
+        if (cascadingDeath
+            || syncingAffinityDamage
+            || !OIMRConfig.isFullAffinity()
+            || !isSharedEnvFireSource(source)
+            || !(entity instanceof ServerPlayer player)
+            || !isAttached(player)) {
+            return damage;
+        }
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return damage;
+        }
+        HiveMind hive = getHiveForPlayer(player);
+        if (hive == null) {
+            return damage;
+        }
+        long gameTime = server.overworld().getGameTime();
+        long elapsed = gameTime - hive.getLastEnvFireHurtTick();
+        if (elapsed >= 0L && elapsed < 10L && damage > hive.getLastEnvFireHurtDamage()) {
+            return damage - hive.getLastEnvFireHurtDamage();
+        }
+        return damage;
+    }
+
+    public static void recordEnvFireHurtIfApplicable(LivingEntity entity, DamageSource source, float preCooldownDamage) {
+        if (cascadingDeath
+            || syncingAffinityDamage
+            || !OIMRConfig.isFullAffinity()
+            || !isSharedEnvFireSource(source)
+            || !(entity instanceof ServerPlayer player)
+            || !isAttached(player)) {
+            return;
+        }
+        MinecraftServer server = player.level().getServer();
+        if (server == null) {
+            return;
+        }
+        HiveMind hive = getHiveForPlayer(player);
+        if (hive == null) {
+            return;
+        }
+        long gameTime = server.overworld().getGameTime();
+        long elapsed = gameTime - hive.getLastEnvFireHurtTick();
+        if (elapsed >= 0L && elapsed < 10L) {
+            if (preCooldownDamage > hive.getLastEnvFireHurtDamage()) {
+                hive.recordEnvFireHurt(hive.getLastEnvFireHurtTick(), preCooldownDamage);
+            }
+        } else {
+            hive.recordEnvFireHurt(gameTime, preCooldownDamage);
+        }
     }
 
     public static void onHealthChanged(LivingEntity entity) {
@@ -1734,9 +2669,21 @@ public final class HiveMindManager {
         if (cascadingDeath
             || syncingAffinityDamage
             || suppressAffinityVitalsCascade
-            || OIMRConfig.isFullAffinity()
+            || syncingHealth
             || damageTaken <= 0.0F
             || !isAttached(victim)) {
+            return;
+        }
+        MinecraftServer server = victim.level().getServer();
+        String hiveId = PLAYER_HIVES.get(victim.getUUID());
+        if (server != null && hiveId != null) {
+            DamageIconType iconType = DamageIconType.fromDamageSource(source);
+            String victimName = victim.getGameProfile().name();
+            for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
+                OIMRNetworking.sendDamageFeed(member, victimName, iconType, damageTaken);
+            }
+        }
+        if (OIMRConfig.isFullAffinity()) {
             return;
         }
         if (source.is(DamageTypes.GENERIC_KILL) && damageTaken >= 10000.0F) {
@@ -1751,12 +2698,7 @@ public final class HiveMindManager {
             return;
         }
 
-        MinecraftServer server = victim.level().getServer();
-        if (server == null) {
-            return;
-        }
-        String hiveId = PLAYER_HIVES.get(victim.getUUID());
-        if (hiveId == null) {
+        if (server == null || hiveId == null) {
             return;
         }
         HiveMind hive = HiveMindData.get(server).getIfPresent(hiveId);
@@ -1834,6 +2776,285 @@ public final class HiveMindManager {
         }
         if (dirty) {
             HiveMindData.get(server).setDirty();
+        }
+    }
+
+    public static void onPlayerConsumedFood(ServerPlayer eater, ItemStack foodItem, int recoveredFoodPoints) {
+        if (cascadingDeath || foodItem.isEmpty() || !isAttached(eater)) {
+            return;
+        }
+        MinecraftServer server = eater.level().getServer();
+        String hiveId = PLAYER_HIVES.get(eater.getUUID());
+        if (server == null || hiveId == null) {
+            return;
+        }
+        String eaterName = eater.getGameProfile().name();
+        ItemStack iconStack = foodItem.copyWithCount(1);
+        int clampedRecovered = Math.max(0, recoveredFoodPoints);
+        for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
+            OIMRNetworking.sendFoodFeed(member, eaterName, iconStack, clampedRecovered);
+        }
+    }
+
+    public static void onEnderPearlTeleport(ServerPlayer source, ServerLevel targetLevel, Vec3 targetPos) {
+        if (syncingGroupTeleport
+            || cascadingDeath
+            || !OIMRConfig.isSharedEnderPearlEnabled()
+            || !isAttached(source)
+            || source.isDeadOrDying()
+            || source.isSpectator()) {
+            return;
+        }
+        teleportHiveMembersTogether(source, targetLevel, targetPos, false, TeleportTransition.DO_NOTHING);
+    }
+
+    public static void onPortalTeleport(ServerPlayer source, TeleportTransition sourceTransition) {
+        if (syncingGroupTeleport
+            || cascadingDeath
+            || !OIMRConfig.isSharedPortalsEnabled()
+            || !isAttached(source)
+            || source.isDeadOrDying()
+            || source.isSpectator()) {
+            return;
+        }
+        ServerLevel targetLevel = source.level();
+        Vec3 targetPos = source.position();
+        TeleportTransition.PostTeleportTransition post =
+            TeleportTransition.PLAY_PORTAL_SOUND.then(TeleportTransition.PLACE_PORTAL_TICKET);
+        teleportHiveMembersTogether(source, targetLevel, targetPos, true, post);
+    }
+
+    public static void onEndCreditsPortalTriggered(ServerPlayer source) {
+        if (syncingGroupTeleport
+            || cascadingDeath
+            || !OIMRConfig.isSharedPortalsEnabled()
+            || !isAttached(source)
+            || source.isDeadOrDying()
+            || source.isSpectator()) {
+            return;
+        }
+        MinecraftServer server = source.level().getServer();
+        if (server == null) {
+            return;
+        }
+        String hiveId = PLAYER_HIVES.get(source.getUUID());
+        if (hiveId == null) {
+            return;
+        }
+
+        syncingGroupTeleport = true;
+        try {
+            for (ServerPlayer other : getAliveMembers(server, hiveId)) {
+                if (other == source
+                    || other.isRemoved()
+                    || other.isDeadOrDying()
+                    || other.isSpectator()
+                    || other.wonGame
+                    || other.connection == null
+                    || !other.connection.isAcceptingMessages()) {
+                    continue;
+                }
+                if (other.level().dimension() == Level.END) {
+                    if (other.isSleeping()) {
+                        other.stopSleeping();
+                    }
+                    ((HiveEntityPortalAccess) other).oimr$setPortalProcess(null);
+                    other.setPortalCooldown();
+                    if (!other.seenCredits) {
+                        other.showEndCredits();
+                    } else {
+                        TeleportTransition respawn = other.findRespawnPositionAndUseSpawnBlock(false, TeleportTransition.DO_NOTHING);
+                        ServerPlayer teleported = other.teleport(respawn);
+                        if (teleported != null) {
+                            teleported.resetFallDistance();
+                            teleported.resetCurrentImpulseContext();
+                        }
+                    }
+                }
+            }
+        } finally {
+            syncingGroupTeleport = false;
+        }
+    }
+
+    private static void teleportHiveMembersTogether(
+        ServerPlayer source,
+        ServerLevel targetLevel,
+        Vec3 targetPos,
+        boolean portalCooldown,
+        TeleportTransition.PostTeleportTransition postTransition
+    ) {
+        MinecraftServer server = targetLevel.getServer();
+        String hiveId = PLAYER_HIVES.get(source.getUUID());
+        if (hiveId == null) {
+            return;
+        }
+
+        syncingGroupTeleport = true;
+        try {
+            for (ServerPlayer other : getAliveMembers(server, hiveId)) {
+                if (other == source
+                    || other.isRemoved()
+                    || other.isDeadOrDying()
+                    || other.isSpectator()
+                    || other.connection == null
+                    || !other.connection.isAcceptingMessages()) {
+                    continue;
+                }
+                if (other.isSleeping()) {
+                    other.stopSleeping();
+                }
+                if (portalCooldown) {
+                    ((HiveEntityPortalAccess) other).oimr$setPortalProcess(null);
+                    other.setPortalCooldown();
+                }
+                TeleportTransition transition = new TeleportTransition(
+                    targetLevel,
+                    targetPos,
+                    Vec3.ZERO,
+                    other.getYRot(),
+                    other.getXRot(),
+                    Set.of(),
+                    postTransition
+                );
+                ServerPlayer teleported = other.teleport(transition);
+                if (teleported != null) {
+                    teleported.resetFallDistance();
+                    teleported.resetCurrentImpulseContext();
+                }
+            }
+        } finally {
+            syncingGroupTeleport = false;
+        }
+    }
+
+    public static void pushActiveMobSoundSource(Mob mob) {
+        ACTIVE_MOB_SOUND_SOURCES.get().add(mob);
+    }
+
+    public static void popActiveMobSoundSource() {
+        List<Mob> stack = ACTIVE_MOB_SOUND_SOURCES.get();
+        if (!stack.isEmpty()) {
+            stack.removeLast();
+        }
+    }
+
+    public static @Nullable Mob peekActiveMobSoundSource() {
+        List<Mob> stack = ACTIVE_MOB_SOUND_SOURCES.get();
+        return stack.isEmpty() ? null : stack.getLast();
+    }
+
+    public static void onMobSoundEmitted(
+        ServerLevel level,
+        @Nullable Entity except,
+        Vec3 mobPos,
+        Holder<SoundEvent> sound,
+        SoundSource source,
+        float volume,
+        float pitch,
+        long seed
+    ) {
+        if (!OIMRConfig.isSharedMobSoundsEnabled() || volume <= 0.0F) {
+            return;
+        }
+        float affinityFactor = OIMRConfig.getAffinityFactor();
+        if (affinityFactor <= 0.0F) {
+            return;
+        }
+        MinecraftServer server = level.getServer();
+        HiveMindData data = HiveMindData.get(server);
+        if (data.getAll().isEmpty()) {
+            return;
+        }
+
+        long gameTime = level.getGameTime();
+        if (gameTime != recentMobSoundGameTime) {
+            recentMobSoundGameTime = gameTime;
+            RECENT_MOB_SOUNDS.clear();
+        }
+
+        float range = sound.value().getRange(volume);
+        double rangeSq = (double) range * (double) range;
+        float replicatedVolume = volume * affinityFactor;
+        float replicatedRange = sound.value().getRange(replicatedVolume);
+
+        for (HiveMind hive : data.getAll()) {
+            List<ServerPlayer> members = getOnlineMembers(server, hive.getId());
+            int groupSize = members.size();
+            if (groupSize <= 1) {
+                continue;
+            }
+
+            ServerPlayer closestOriginalListener = null;
+            double closestDistSq = Double.MAX_VALUE;
+            List<ServerPlayer> recipients = null;
+
+            for (ServerPlayer member : members) {
+                if (member.isDeadOrDying() || member.isSpectator()) {
+                    continue;
+                }
+                boolean inNativeRange = member != except
+                    && member.level() == level
+                    && member.position().distanceToSqr(mobPos) < rangeSq;
+                if (inNativeRange) {
+                    double distSq = member.position().distanceToSqr(mobPos);
+                    if (distSq < closestDistSq) {
+                        closestDistSq = distSq;
+                        closestOriginalListener = member;
+                    }
+                } else if (member != except && member.connection != null) {
+                    if (recipients == null) {
+                        recipients = new ArrayList<>();
+                    }
+                    recipients.add(member);
+                }
+            }
+
+            if (closestOriginalListener == null || recipients == null || recipients.isEmpty()) {
+                continue;
+            }
+            if (!RECENT_MOB_SOUNDS.add(new MobSoundDedupKey(hive.getId(), sound.value(), source, seed))) {
+                continue;
+            }
+            if (ThreadLocalRandom.current().nextInt(groupSize) != 0) {
+                continue;
+            }
+
+            double emissionDistance = Math.sqrt(closestDistSq);
+            double replicatedDistance = (range > 0.0F && replicatedRange < range)
+                ? emissionDistance * ((double) replicatedRange / (double) range)
+                : emissionDistance;
+            Vec3 fallbackOffset = mobPos.subtract(closestOriginalListener.position());
+            double fallbackLen = fallbackOffset.length();
+            if (fallbackLen > 1.0E-5D && Math.abs(replicatedDistance - emissionDistance) > 1.0E-6D) {
+                fallbackOffset = fallbackOffset.scale(replicatedDistance / fallbackLen);
+            }
+
+            for (ServerPlayer recipient : recipients) {
+                Vec3 repPos;
+                if (recipient.level() == level) {
+                    Vec3 toMob = mobPos.subtract(recipient.position());
+                    double toMobLen = toMob.length();
+                    if (toMobLen > 1.0E-5D) {
+                        repPos = recipient.position().add(toMob.scale(replicatedDistance / toMobLen));
+                    } else {
+                        repPos = recipient.position().add(fallbackOffset);
+                    }
+                } else {
+                    repPos = recipient.position().add(fallbackOffset);
+                }
+
+                recipient.connection.send(new ClientboundSoundPacket(
+                    sound,
+                    source,
+                    repPos.x,
+                    repPos.y,
+                    repPos.z,
+                    replicatedVolume,
+                    pitch,
+                    seed
+                ));
+            }
         }
     }
 
@@ -2289,17 +3510,151 @@ public final class HiveMindManager {
 
     public static void onBeforePlayerDie(ServerPlayer player, DamageSource source) {
         DYING_DAMAGE_SOURCES.put(player.getUUID(), source);
-        if (!cascadingDeath
-            && isAttached(player)
-            && (player.hasContainerOpen()
-                || !player.containerMenu.getCarried().isEmpty()
-                || !player.inventoryMenu.getCraftSlots().isEmpty())) {
-            player.doCloseContainer();
+        if (!isAttached(player)) {
+            return;
         }
+        if (cascadingDeath) {
+            releaseAmmoReservation(player, null);
+            if (OIMRConfig.isRandomDeathLootEnabled()
+                && !player.isSpectator()
+                && DEAD_SCREEN_PLAYERS.add(player.getUUID())) {
+                player.level().getChunkSource().chunkMap.move(player);
+            }
+            return;
+        }
+        ServerPlayer chosenLootTarget = selectDeathLootTarget(player);
+        releaseAmmoReservation(player, chosenLootTarget);
+        if (chosenLootTarget != null) {
+            ACTIVE_DEATH_LOOT_TARGETS.put(player.getUUID(), chosenLootTarget);
+        } else {
+            ACTIVE_DEATH_LOOT_TARGETS.remove(player.getUUID());
+        }
+        hideDroppedEntitiesForDyingHive(player);
+        if (player.hasContainerOpen()
+            || !player.containerMenu.getCarried().isEmpty()
+            || !player.inventoryMenu.getCraftSlots().isEmpty()) {
+            closingDeathContainer = chosenLootTarget != null && chosenLootTarget != player;
+            try {
+                player.doCloseContainer();
+            } finally {
+                closingDeathContainer = false;
+            }
+        }
+    }
+
+    private static void hideDroppedEntitiesForDyingHive(ServerPlayer victim) {
+        if (!OIMRConfig.isRandomDeathLootEnabled() || !OIMRConfig.isFullAffinity() || victim.isSpectator()) {
+            return;
+        }
+        if (DEAD_SCREEN_PLAYERS.add(victim.getUUID())) {
+            victim.level().getChunkSource().chunkMap.move(victim);
+        }
+        MinecraftServer server = victim.level().getServer();
+        String hiveId = PLAYER_HIVES.get(victim.getUUID());
+        if (server == null || hiveId == null) {
+            return;
+        }
+        for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
+            if (member == victim || member.isDeadOrDying() || member.isSpectator()) {
+                continue;
+            }
+            if (member.isCreative() && OIMRConfig.isExcludeCreativeFromDeathEnabled()) {
+                continue;
+            }
+            if (DEAD_SCREEN_PLAYERS.add(member.getUUID())) {
+                member.level().getChunkSource().chunkMap.move(member);
+            }
+        }
+    }
+
+    public static boolean shouldHideDroppedEntityFromPlayer(Entity entity, ServerPlayer player) {
+        if (!OIMRConfig.isRandomDeathLootEnabled()) {
+            return false;
+        }
+        if (!(entity instanceof ItemEntity) && !(entity instanceof ExperienceOrb)) {
+            return false;
+        }
+        if (!isAttached(player)) {
+            return false;
+        }
+        return player.isDeadOrDying() || DEAD_SCREEN_PLAYERS.contains(player.getUUID());
+    }
+
+    private static @Nullable ServerPlayer selectDeathLootTarget(ServerPlayer victim) {
+        if (!OIMRConfig.isRandomDeathLootEnabled()
+            || !OIMRConfig.isFullAffinity()
+            || victim.isSpectator()) {
+            return null;
+        }
+        MinecraftServer server = victim.level().getServer();
+        if (server == null) {
+            return null;
+        }
+        if (victim.level().getGameRules().get(GameRules.KEEP_INVENTORY) || shouldSuppressDeathInventoryDrop(victim)) {
+            return null;
+        }
+        String hiveId = PLAYER_HIVES.get(victim.getUUID());
+        if (hiveId == null) {
+            return null;
+        }
+        List<ServerPlayer> candidates = new ArrayList<>();
+        candidates.add(victim);
+        for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
+            if (member == victim || member.isDeadOrDying() || member.isSpectator()) {
+                continue;
+            }
+            if (member.isCreative() && OIMRConfig.isExcludeCreativeFromDeathEnabled()) {
+                continue;
+            }
+            candidates.add(member);
+        }
+        if (candidates.size() <= 1) {
+            return null;
+        }
+        return candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
+    }
+
+    public static @Nullable ServerPlayer resolveDeathLootTarget(Player player) {
+        if (!(player instanceof ServerPlayer serverPlayer)) {
+            return null;
+        }
+        ServerPlayer target = ACTIVE_DEATH_LOOT_TARGETS.get(serverPlayer.getUUID());
+        if (target == null || target.isRemoved()) {
+            return null;
+        }
+        return target;
+    }
+
+    public static @Nullable ServerPlayer resolveContainerCloseDropTarget(LivingEntity entity) {
+        if (!closingDeathContainer || !(entity instanceof ServerPlayer player)) {
+            return null;
+        }
+        return resolveDeathLootTarget(player);
     }
 
     public static void popDyingDamageSource(ServerPlayer player) {
         DYING_DAMAGE_SOURCES.remove(player.getUUID());
+    }
+
+    public static void onAfterPlayerDieReturn(ServerPlayer player) {
+        popDyingDamageSource(player);
+        if (cascadingDeath || player.isDeadOrDying()) {
+            return;
+        }
+        ACTIVE_DEATH_LOOT_TARGETS.remove(player.getUUID());
+        CAPTURED_DEATH_CONTEXTS.remove(player.getUUID());
+        if (DEAD_SCREEN_PLAYERS.remove(player.getUUID())) {
+            player.level().getChunkSource().chunkMap.move(player);
+        }
+        MinecraftServer server = player.level().getServer();
+        String hiveId = PLAYER_HIVES.get(player.getUUID());
+        if (server != null && hiveId != null) {
+            for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
+                if (!member.isDeadOrDying() && DEAD_SCREEN_PLAYERS.remove(member.getUUID())) {
+                    member.level().getChunkSource().chunkMap.move(member);
+                }
+            }
+        }
     }
 
     public static @Nullable DamageSource peekDyingDamageSource(LivingEntity entity) {
@@ -2576,6 +3931,7 @@ public final class HiveMindManager {
         if (cascadingDeath || !(entity instanceof ServerPlayer victim) || !isAttached(victim)) {
             return;
         }
+        ServerPlayer chosenLootTarget = ACTIVE_DEATH_LOOT_TARGETS.remove(victim.getUUID());
         CapturedDeathContext captured = CAPTURED_DEATH_CONTEXTS.remove(victim.getUUID());
         MinecraftServer server = victim.level().getServer();
         if (server == null) {
@@ -2653,7 +4009,15 @@ public final class HiveMindManager {
                     other.totalExperience = 0;
                     other.experienceProgress = 0.0F;
                 }
-                other.doCloseContainer();
+                if (chosenLootTarget != null && !keepInventory && !preserveForCreative) {
+                    ACTIVE_DEATH_LOOT_TARGETS.put(other.getUUID(), chosenLootTarget);
+                }
+                closingDeathContainer = chosenLootTarget != null && chosenLootTarget != other && !keepInventory && !preserveForCreative;
+                try {
+                    other.doCloseContainer();
+                } finally {
+                    closingDeathContainer = false;
+                }
                 boolean suppressChat = captured != null && captured.collectiveStarve();
                 Component customDeathMessage = buildTeammateDeathMessage(other, victim, hiveId, source, captured);
                 PENDING_DEATH_MESSAGES.put(other.getUUID(), customDeathMessage);
@@ -2667,12 +4031,19 @@ public final class HiveMindManager {
                         other.die(other.level().damageSources().genericKill());
                     }
                 } finally {
+                    ACTIVE_DEATH_LOOT_TARGETS.remove(other.getUUID());
                     PENDING_DEATH_MESSAGES.remove(other.getUUID());
                     SUPPRESS_DEATH_CHAT.remove(other.getUUID());
                 }
             }
         } finally {
             cascadingDeath = false;
+        }
+
+        for (ServerPlayer member : getOnlineMembers(server, hiveId)) {
+            if (!member.isDeadOrDying() && DEAD_SCREEN_PLAYERS.remove(member.getUUID())) {
+                member.level().getChunkSource().chunkMap.move(member);
+            }
         }
     }
 
@@ -2811,6 +4182,19 @@ public final class HiveMindManager {
             }
         }
         return best.source();
+    }
+
+    private record AmmoReservation(
+        UUID playerUuid,
+        @Nullable String hiveId,
+        InteractionHand hand,
+        ItemStack weaponSnapshot,
+        ItemStack reservedStack,
+        int sourceSlot
+    ) {
+    }
+
+    private record MobSoundDedupKey(String hiveId, SoundEvent sound, SoundSource source, long seed) {
     }
 
     private record PendingDamageContribution(DamageSource source, double amount) {

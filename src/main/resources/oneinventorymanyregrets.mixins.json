@@ -4,7 +4,10 @@
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
 		"AreaEffectCloudMixin",
+		"CakeBlockMixin",
 		"CombatTrackerMixin",
+		"ConsumableMixin",
+		"CrossbowItemMixin",
 		"EnchantmentMenuMixin",
 		"EntityEquipmentMixin",
 		"EntityMixin",
@@ -18,19 +21,32 @@
 		"MobMixin",
 		"PlayerAdvancementsMixin",
 		"PlayerMixin",
+		"PortalProcessorMixin",
 		"ServerExplosionMixin",
+		"ServerCommonPacketListenerImplMixin",
 		"ServerGamePacketListenerImplMixin",
+		"ServerLevelMixin",
 		"ServerPlayerMixin",
+		"ServerPlayerGameModeMixin",
 		"ServerRecipeBookMixin",
 		"ServerScoreboardMixin",
 		"SimpleContainerMixin",
+		"ThrownEnderpearlMixin",
 		"ThrownSplashPotionMixin",
 		"VillagerMixin",
 		"ZombieVillagerMixin"
 	],
 	"client": [
+		"client.FogRendererMixin",
+		"client.GuiItemRenderStateMixin",
+		"client.GuiRendererMixin",
+		"client.LevelExtractorMixin",
+		"client.LocalPlayerMixin",
 		"client.OptionsScreenMixin",
-		"client.PlayerTabOverlayMixin"
+		"client.PlayerTabOverlayMixin",
+		"client.UnderLiquidAmbientSoundInstanceMixin",
+		"client.UnderLiquidSubSoundMixin",
+		"client.UnderwaterAmbientSoundHandlerMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

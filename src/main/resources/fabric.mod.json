@@ -11,7 +11,7 @@
 		"homepage": "https://iakee.online",
 		"sources": "https://github.com/iakee/oneinventorymanyregrets"
 	},
-	"license": "CC0-1.0",
+	"license": "MIT",
 	"icon": "assets/oneinventorymanyregrets/icon.png",
 	"environment": "*",
 	"entrypoints": {

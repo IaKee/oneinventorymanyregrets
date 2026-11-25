@@ -17,6 +17,7 @@ import net.minecraft.client.gui.screens.options.OptionsSubScreen;
 import net.minecraft.client.server.IntegratedServer;
 import net.minecraft.network.chat.CommonComponents;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 
 import java.text.DecimalFormat;
@@ -75,11 +76,28 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
         xpSlider.setTooltip(Tooltip.create(Component.translatable("oimr.settings.xp_weight.tooltip")));
         this.list.addSmall(hungerSlider, xpSlider);
 
+        boolean isHostMenu = this.minecraft == null
+            || this.minecraft.level == null
+            || this.minecraft.getSingleplayerServer() != null;
+        if (isHostMenu) {
+            CycleButton<Boolean> syncEffectsButton = CycleButton.onOffBuilder(OIMRConfig.isSyncEffectsEnabled())
+                .withTooltip(v -> Tooltip.create(Component.translatable("oimr.settings.sync_effects.tooltip")))
+                .create(
+                    0,
+                    0,
+                    310,
+                    20,
+                    Component.translatable("oimr.settings.sync_effects"),
+                    (button, value) -> applyBooleanSetting(OIMRConfig.KEY_SYNC_EFFECTS, value)
+                );
+            this.list.addBig(syncEffectsButton);
+        }
+
         // Section 2: Synced Inventory & Equipment
         this.list.addHeader(Component.translatable("oimr.settings.section.slots"));
 
         MultiLineTextWidget dupWarning = new MultiLineTextWidget(
-            Component.translatable("oimr.settings.slots_duplication_warning").withStyle(ChatFormatting.YELLOW),
+            Component.translatable("oimr.settings.slots_duplication_warning").withStyle(ChatFormatting.GRAY),
             this.font
         ).setMaxWidth(310).setCentered(true);
         dupWarning.setTooltip(Tooltip.create(Component.translatable("oimr.settings.slots_duplication_warning.tooltip")));
@@ -95,7 +113,7 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
                 20,
                 Component.translatable("oimr.settings.sync_hotbar"),
                 (button, value) -> {
-                    applySetting(() -> OIMRConfig.setSyncHotbar(value));
+                    applyBooleanSetting(OIMRConfig.KEY_SYNC_HOTBAR, value);
                     updateMainHandButtonState(value);
                 }
             );
@@ -108,7 +126,7 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
                 150,
                 20,
                 Component.translatable("oimr.settings.sync_main_hand"),
-                (button, value) -> applySetting(() -> OIMRConfig.setSyncMainHand(value))
+                (button, value) -> applyBooleanSetting(OIMRConfig.KEY_SYNC_MAIN_HAND, value)
             );
         updateMainHandButtonState(hotbarSynced);
 
@@ -116,25 +134,25 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
             "oimr.settings.sync_off_hand",
             "oimr.settings.sync_off_hand.tooltip",
             OIMRConfig.isSyncOffHandEnabled(),
-            OIMRConfig::setSyncOffHand
+            OIMRConfig.KEY_SYNC_OFF_HAND
         );
         this.list.addSmall(this.mainHandButton, offHandButton);
 
         this.list.addSmall(
-            smallToggle("oimr.settings.sync_helmet", "oimr.settings.sync_helmet.tooltip", OIMRConfig.isSyncHelmetEnabled(), OIMRConfig::setSyncHelmet),
-            smallToggle("oimr.settings.sync_chestplate", "oimr.settings.sync_chestplate.tooltip", OIMRConfig.isSyncChestplateEnabled(), OIMRConfig::setSyncChestplate)
+            smallToggle("oimr.settings.sync_helmet", "oimr.settings.sync_helmet.tooltip", OIMRConfig.isSyncHelmetEnabled(), OIMRConfig.KEY_SYNC_HELMET),
+            smallToggle("oimr.settings.sync_chestplate", "oimr.settings.sync_chestplate.tooltip", OIMRConfig.isSyncChestplateEnabled(), OIMRConfig.KEY_SYNC_CHESTPLATE)
         );
         this.list.addSmall(
-            smallToggle("oimr.settings.sync_leggings", "oimr.settings.sync_leggings.tooltip", OIMRConfig.isSyncLeggingsEnabled(), OIMRConfig::setSyncLeggings),
-            smallToggle("oimr.settings.sync_boots", "oimr.settings.sync_boots.tooltip", OIMRConfig.isSyncBootsEnabled(), OIMRConfig::setSyncBoots)
+            smallToggle("oimr.settings.sync_leggings", "oimr.settings.sync_leggings.tooltip", OIMRConfig.isSyncLeggingsEnabled(), OIMRConfig.KEY_SYNC_LEGGINGS),
+            smallToggle("oimr.settings.sync_boots", "oimr.settings.sync_boots.tooltip", OIMRConfig.isSyncBootsEnabled(), OIMRConfig.KEY_SYNC_BOOTS)
         );
 
         // Section 3: Combat & Death Rules
         this.list.addHeader(Component.translatable("oimr.settings.section.combat"));
 
         this.list.addSmall(
-            smallToggle("oimr.settings.shared_knockback", "oimr.settings.shared_knockback.tooltip", OIMRConfig.isSharedKnockbackEnabled(), OIMRConfig::setSharedKnockback),
-            smallToggle("oimr.settings.friendly_pets", "oimr.settings.friendly_pets.tooltip", OIMRConfig.isFriendlyPetsEnabled(), OIMRConfig::setFriendlyPets)
+            smallToggle("oimr.settings.shared_knockback", "oimr.settings.shared_knockback.tooltip", OIMRConfig.isSharedKnockbackEnabled(), OIMRConfig.KEY_SHARED_KNOCKBACK),
+            smallToggle("oimr.settings.friendly_pets", "oimr.settings.friendly_pets.tooltip", OIMRConfig.isFriendlyPetsEnabled(), OIMRConfig.KEY_FRIENDLY_PETS)
         );
 
         boolean excludeCreative = OIMRConfig.isExcludeCreativeFromDeathEnabled();
@@ -147,7 +165,7 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
                 20,
                 Component.translatable("oimr.settings.exclude_creative"),
                 (button, value) -> {
-                    applySetting(() -> OIMRConfig.setExcludeCreativeFromDeath(value));
+                    applyBooleanSetting(OIMRConfig.KEY_EXCLUDE_CREATIVE_FROM_DEATH, value);
                     if (this.wipeCreativeButton != null) {
                         this.wipeCreativeButton.active = value;
                     }
@@ -157,10 +175,22 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
             "oimr.settings.wipe_creative",
             "oimr.settings.wipe_creative.tooltip",
             OIMRConfig.isWipeCreativeInventoryOnDeathEnabled(),
-            OIMRConfig::setWipeCreativeInventoryOnDeath
+            OIMRConfig.KEY_WIPE_CREATIVE_INVENTORY_ON_DEATH
         );
         this.wipeCreativeButton.active = excludeCreative;
         this.list.addSmall(excludeCreativeButton, this.wipeCreativeButton);
+
+        CycleButton<Boolean> randomDeathLootButton = CycleButton.onOffBuilder(OIMRConfig.isRandomDeathLootEnabled())
+            .withTooltip(v -> Tooltip.create(Component.translatable("oimr.settings.random_death_loot.tooltip")))
+            .create(
+                0,
+                0,
+                310,
+                20,
+                Component.translatable("oimr.settings.random_death_loot"),
+                (button, value) -> applyBooleanSetting(OIMRConfig.KEY_RANDOM_DEATH_LOOT, value)
+            );
+        this.list.addBig(randomDeathLootButton);
 
         CycleButton<Boolean> comunismButton = CycleButton.onOffBuilder(OIMRConfig.isComunismEnabled())
             .withTooltip(v -> Tooltip.create(Component.translatable("oimr.settings.comunism.tooltip")))
@@ -170,9 +200,21 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
                 310,
                 20,
                 Component.translatable("oimr.settings.comunism"),
-                (button, value) -> applySetting(() -> OIMRConfig.setComunism(value))
+                (button, value) -> applyBooleanSetting(OIMRConfig.KEY_COMUNISM, value)
             );
         this.list.addBig(comunismButton);
+
+        // Section 4: Teleport & Sensory
+        this.list.addHeader(Component.translatable("oimr.settings.section.world_audio"));
+
+        this.list.addSmall(
+            smallToggle("oimr.settings.shared_ender_pearl", "oimr.settings.shared_ender_pearl.tooltip", OIMRConfig.isSharedEnderPearlEnabled(), OIMRConfig.KEY_SHARED_ENDER_PEARL),
+            smallToggle("oimr.settings.shared_portals", "oimr.settings.shared_portals.tooltip", OIMRConfig.isSharedPortalsEnabled(), OIMRConfig.KEY_SHARED_PORTALS)
+        );
+        this.list.addSmall(
+            smallToggle("oimr.settings.underwater_muffle", "oimr.settings.underwater_muffle.tooltip", OIMRConfig.isUnderwaterMuffleEnabled(), OIMRConfig.KEY_UNDERWATER_MUFFLE),
+            smallToggle("oimr.settings.shared_mob_sounds", "oimr.settings.shared_mob_sounds.tooltip", OIMRConfig.isSharedMobSoundsEnabled(), OIMRConfig.KEY_SHARED_MOB_SOUNDS)
+        );
     }
 
     @Override
@@ -180,11 +222,15 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
         LinearLayout footer = this.layout.addToFooter(LinearLayout.horizontal().spacing(8));
         footer.addChild(
             Button.builder(Component.translatable("oimr.settings.reset"), button ->
-                applySetting(OIMRConfig::resetToDefaults, () -> {
-                    if (this.minecraft != null && this.minecraft.gui.screen() == this) {
-                        this.rebuildWidgets();
+                applyServerOrLocal(
+                    (server, host) -> HiveMindManager.resetConfigToDefaults(server, host),
+                    OIMRConfig::resetToDefaults,
+                    () -> {
+                        if (this.minecraft != null && this.minecraft.gui.screen() == this) {
+                            this.rebuildWidgets();
+                        }
                     }
-                })
+                )
             ).width(150).build()
         );
         footer.addChild(
@@ -213,7 +259,7 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
         String labelKey,
         String tooltipKey,
         boolean initialValue,
-        java.util.function.Consumer<Boolean> setter
+        String configKey
     ) {
         return CycleButton.onOffBuilder(initialValue)
             .withTooltip(v -> Tooltip.create(Component.translatable(tooltipKey)))
@@ -223,26 +269,42 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
                 150,
                 20,
                 Component.translatable(labelKey),
-                (button, value) -> applySetting(() -> setter.accept(value))
+                (button, value) -> applyBooleanSetting(configKey, value)
             );
     }
 
-    private void applySetting(Runnable action) {
-        applySetting(action, null);
+    private void applyBooleanSetting(String key, boolean enabled) {
+        applyServerOrLocal(
+            (server, host) -> HiveMindManager.applyBooleanSetting(server, host, key, enabled),
+            () -> OIMRConfig.setBooleanSettingWithTransition(key, enabled, null),
+            null
+        );
     }
 
-    private void applySetting(Runnable action, @org.jspecify.annotations.Nullable Runnable afterOnClient) {
+    private void applySetting(Runnable action) {
+        applyServerOrLocal((server, host) -> {
+            action.run();
+            HiveMindManager.onConfigChanged(server);
+        }, action, null);
+    }
+
+    private void applyServerOrLocal(
+        java.util.function.BiConsumer<net.minecraft.server.MinecraftServer, @org.jspecify.annotations.Nullable ServerPlayer> serverAction,
+        Runnable localAction,
+        @org.jspecify.annotations.Nullable Runnable afterOnClient
+    ) {
         IntegratedServer server = this.minecraft != null ? this.minecraft.getSingleplayerServer() : null;
         if (server != null) {
+            java.util.UUID hostUuid = this.minecraft.player != null ? this.minecraft.player.getUUID() : null;
             server.execute(() -> {
-                action.run();
-                HiveMindManager.onConfigChanged(server);
+                ServerPlayer host = hostUuid != null ? server.getPlayerList().getPlayer(hostUuid) : null;
+                serverAction.accept(server, host);
                 if (afterOnClient != null && this.minecraft != null) {
                     this.minecraft.execute(afterOnClient);
                 }
             });
         } else {
-            action.run();
+            localAction.run();
             if (afterOnClient != null) {
                 afterOnClient.run();
             }

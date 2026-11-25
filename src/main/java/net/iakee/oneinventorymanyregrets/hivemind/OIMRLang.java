@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.iakee.oneinventorymanyregrets.OIMRMod;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.contents.TranslatableContents;
@@ -17,26 +18,63 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
- * Loads bundled mod translation tables so death and system messages always carry
+ * Loads bundled mod translation tables so death, command, and system messages always carry
  * fallback text for vanilla LAN/multiplayer clients that do not have the mod installed.
  */
 public final class OIMRLang {
     private static final String PREFIX_DEATH = "death.oimr.";
     private static final String PREFIX_OIMR = "oimr.";
 
-    private static final Map<String, String> EN_US = loadLang("en_us");
-    private static final Map<String, String> PT_BR = loadLang("pt_br");
+    private static final Map<String, String> PREFIX_FALLBACKS = Map.ofEntries(
+        Map.entry("ar", "ar_sa"),
+        Map.entry("be", "be_by"),
+        Map.entry("de", "de_de"),
+        Map.entry("en", "en_us"),
+        Map.entry("es", "es_es"),
+        Map.entry("fil", "fil_ph"),
+        Map.entry("fr", "fr_fr"),
+        Map.entry("id", "id_id"),
+        Map.entry("it", "it_it"),
+        Map.entry("ja", "ja_jp"),
+        Map.entry("ko", "ko_kr"),
+        Map.entry("ms", "ms_my"),
+        Map.entry("nb", "no_no"),
+        Map.entry("nl", "nl_nl"),
+        Map.entry("nn", "nn_no"),
+        Map.entry("no", "no_no"),
+        Map.entry("pl", "pl_pl"),
+        Map.entry("pt", "pt_br"),
+        Map.entry("ru", "ru_ru"),
+        Map.entry("sr", "sr_sp"),
+        Map.entry("sv", "sv_se"),
+        Map.entry("tl", "tl_ph"),
+        Map.entry("tr", "tr_tr"),
+        Map.entry("uk", "uk_ua"),
+        Map.entry("vi", "vi_vn"),
+        Map.entry("zh", "zh_cn")
+    );
+
+    private static final ConcurrentMap<String, Map<String, String>> LANG_CACHE = new ConcurrentHashMap<>();
+    private static final Map<String, String> EN_US = getOrLoadLang("en_us");
 
     private OIMRLang() {
+    }
+
+    private static Map<String, String> getOrLoadLang(String langCode) {
+        return LANG_CACHE.computeIfAbsent(langCode, OIMRLang::loadLang);
     }
 
     private static Map<String, String> loadLang(String langCode) {
         String resourcePath = "/assets/" + OIMRMod.MOD_ID + "/lang/" + langCode + ".json";
         try (InputStream stream = OIMRLang.class.getResourceAsStream(resourcePath)) {
             if (stream == null) {
-                OIMRMod.LOGGER.warn("Missing bundled language file: {}", resourcePath);
+                if ("en_us".equals(langCode)) {
+                    OIMRMod.LOGGER.warn("Missing bundled base language file: {}", resourcePath);
+                }
                 return Map.of();
             }
             try (InputStreamReader reader = new InputStreamReader(stream, StandardCharsets.UTF_8)) {
@@ -55,11 +93,36 @@ public final class OIMRLang {
         }
     }
 
+    private static @Nullable String normalizeLangCode(@Nullable String clientLanguage) {
+        if (clientLanguage == null || clientLanguage.isBlank()) {
+            return null;
+        }
+        String normalized = clientLanguage.trim().toLowerCase(Locale.ROOT).replace('-', '_');
+        for (int i = 0; i < normalized.length(); i++) {
+            char c = normalized.charAt(i);
+            boolean valid = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+            if (!valid) {
+                return null;
+            }
+        }
+        return normalized;
+    }
+
     public static @Nullable String getFallback(String key, @Nullable String clientLanguage) {
-        if (clientLanguage != null && clientLanguage.toLowerCase(Locale.ROOT).startsWith("pt")) {
-            String pt = PT_BR.get(key);
-            if (pt != null) {
-                return pt;
+        String normalized = normalizeLangCode(clientLanguage);
+        if (normalized != null) {
+            String exact = getOrLoadLang(normalized).get(key);
+            if (exact != null) {
+                return exact;
+            }
+            int sep = normalized.indexOf('_');
+            String prefix = sep > 0 ? normalized.substring(0, sep) : normalized;
+            String fallbackLang = PREFIX_FALLBACKS.get(prefix);
+            if (fallbackLang != null && !fallbackLang.equals(normalized)) {
+                String prefixed = getOrLoadLang(fallbackLang).get(key);
+                if (prefixed != null) {
+                    return prefixed;
+                }
             }
         }
         return EN_US.get(key);
@@ -98,6 +161,13 @@ public final class OIMRLang {
     public static Component localizeForPlayer(Component component, ServerPlayer recipient) {
         String language = recipient.clientInformation().language();
         return localizeComponent(component, language);
+    }
+
+    public static Component localizeForSource(Component component, CommandSourceStack source) {
+        if (source.getEntity() instanceof ServerPlayer player) {
+            return localizeForPlayer(component, player);
+        }
+        return component;
     }
 
     private static Component localizeComponent(Component component, @Nullable String language) {

@@ -12,9 +12,33 @@ import net.iakee.oneinventorymanyregrets.hivemind.HiveLivingEntityAccess;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMind;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindData;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindManager;
+import net.iakee.oneinventorymanyregrets.hivemind.HiveServerPlayerGameModeAccess;
+import net.iakee.oneinventorymanyregrets.network.DamageIconType;
+import net.iakee.oneinventorymanyregrets.network.OIMRAirFeedPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRBondSyncPayload;
+import net.iakee.oneinventorymanyregrets.network.OIMRDamageFeedPayload;
+import net.iakee.oneinventorymanyregrets.network.OIMRFoodFeedPayload;
+import net.iakee.oneinventorymanyregrets.network.OIMRNetworking;
+import net.iakee.oneinventorymanyregrets.network.OIMRUnderwaterSyncPayload;
 import io.netty.buffer.Unpooled;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientboundAddEntityPacket;
+import net.minecraft.network.protocol.game.ClientboundBundlePacket;
+import net.minecraft.network.protocol.game.ClientboundContainerSetContentPacket;
+import net.minecraft.network.protocol.game.ClientboundRemoveEntitiesPacket;
+import net.minecraft.network.protocol.game.ClientboundSoundPacket;
+import net.minecraft.network.protocol.game.ClientboundSetPlayerInventoryPacket;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.tags.FluidTags;
+import net.minecraft.world.Difficulty;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEnderpearl;
+import net.minecraft.world.level.block.Portal;
+import net.minecraft.world.level.gamerules.GameRules;
+import net.minecraft.world.level.portal.TeleportTransition;
+import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.advancements.AdvancementProgress;
 import net.minecraft.core.BlockPos;
@@ -40,6 +64,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.AreaEffectCloud;
@@ -47,23 +72,31 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.ai.goal.target.DefendVillageTargetGoal;
 import net.minecraft.world.entity.ai.village.ReputationEventType;
 import net.minecraft.world.entity.animal.equine.Llama;
 import net.minecraft.world.entity.animal.fox.Fox;
 import net.minecraft.world.entity.animal.golem.IronGolem;
 import net.minecraft.world.entity.animal.wolf.Wolf;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.zombie.Zombie;
 import net.minecraft.world.entity.monster.zombie.ZombieVillager;
 import net.minecraft.world.entity.npc.villager.Villager;
 import net.minecraft.world.entity.npc.villager.VillagerProfession;
+import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
 import net.minecraft.world.entity.projectile.arrow.Arrow;
+import net.minecraft.world.entity.projectile.arrow.SpectralArrow;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.Snowball;
 import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownSplashPotion;
+import net.minecraft.world.entity.projectile.hurtingprojectile.windcharge.WindCharge;
 import net.minecraft.world.inventory.EnchantmentMenu;
 import net.minecraft.world.inventory.MerchantMenu;
+import net.minecraft.world.item.CrossbowItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.alchemy.PotionContents;
+import net.minecraft.world.item.component.ChargedProjectiles;
 import net.minecraft.world.item.consume_effects.ClearAllStatusEffectsConsumeEffect;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.enchantment.Enchantments;
@@ -86,15 +119,22 @@ import java.util.UUID;
 public class HiveMindGameTests {
 
     private static ServerPlayer spawnTestPlayer(MinecraftServer server, ServerLevel level, String name) {
+        return spawnTestPlayerWithChannel(server, level, name).player();
+    }
+
+    private record TestPlayerHandle(ServerPlayer player, EmbeddedChannel channel) {
+    }
+
+    private static TestPlayerHandle spawnTestPlayerWithChannel(MinecraftServer server, ServerLevel level, String name) {
         GameProfile profile = new GameProfile(UUID.randomUUID(), name);
         CommonListenerCookie cookie = CommonListenerCookie.createInitial(profile, false);
         ServerPlayer player = new ServerPlayer(server, level, profile, ClientInformation.createDefault());
         Connection connection = new Connection(PacketFlow.SERVERBOUND);
-        new EmbeddedChannel(connection);
+        EmbeddedChannel channel = new EmbeddedChannel(connection);
         server.getPlayerList().placeNewPlayer(connection, player, cookie);
         player.setGameMode(GameType.SURVIVAL);
         player.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
-        return player;
+        return new TestPlayerHandle(player, channel);
     }
 
     private static void cleanupPlayers(MinecraftServer server, ServerPlayer... players) {
@@ -114,6 +154,7 @@ public class HiveMindGameTests {
             hive.getEnderChestItems().clear();
             hive.getEquipmentMap().clear();
             hive.resetVitalsForRespawn(20.0F);
+            hive.resetTickClaims();
             hive.resetExperience();
             hive.setRespawnConfig(null);
             hive.getAdvancements().clear();
@@ -150,6 +191,122 @@ public class HiveMindGameTests {
 
             helper.succeed();
         } finally {
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testConcurrentSharedToolsAndRangedWeaponsDoNotInterrupt(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        TestPlayerHandle aliceHandle = spawnTestPlayerWithChannel(server, level, "HiveAliceConcurrentItem");
+        TestPlayerHandle bobHandle = spawnTestPlayerWithChannel(server, level, "HiveBobConcurrentItem");
+        ServerPlayer alice = aliceHandle.player();
+        ServerPlayer bob = bobHandle.player();
+        boolean previousHotbarSync = OIMRConfig.isSyncHotbarEnabled();
+        try {
+            OIMRConfig.setSyncHotbar(true);
+            alice.getInventory().setSelectedSlot(0);
+            bob.getInventory().setSelectedSlot(0);
+
+            ItemStack pickaxe = new ItemStack(Items.IRON_PICKAXE);
+            alice.getInventory().setItem(0, pickaxe);
+            bob.containerMenu.broadcastChanges();
+            ((HiveServerPlayerGameModeAccess) bob.gameMode).oimr$setDestroyingBlockForTest(true);
+
+            ItemStack damagedPickaxe = pickaxe.copy();
+            damagedPickaxe.setDamageValue(1);
+            helper.assertTrue(HiveMindManager.shouldDeferSharedHeldItemUpdate(
+                    bob,
+                    new ClientboundSetPlayerInventoryPacket(0, damagedPickaxe)
+                ),
+                "A teammate's durability update must not interrupt Bob while he mines with the shared pickaxe");
+
+            // 2-arg connection.send(packet, listener) must also be deferred while mining
+            bobHandle.channel().outboundMessages().clear();
+            bob.connection.send(new ClientboundSetPlayerInventoryPacket(0, damagedPickaxe), null);
+            helper.assertTrue(bobHandle.channel().outboundMessages().isEmpty(),
+                "ServerCommonPacketListenerImpl.send(packet, listener) must defer held-item update while mining");
+
+            // ClientboundContainerSetContentPacket must mask slot 0 while keeping other slots updated
+            alice.getInventory().setItem(1, new ItemStack(Items.COBBLESTONE, 5));
+            alice.getInventory().setItem(0, damagedPickaxe);
+            bobHandle.channel().outboundMessages().clear();
+            bob.inventoryMenu.sendAllDataToRemote();
+            ClientboundContainerSetContentPacket maskedContent = null;
+            Object rawMsg;
+            while ((rawMsg = bobHandle.channel().outboundMessages().poll()) != null) {
+                if (rawMsg instanceof ClientboundContainerSetContentPacket content) {
+                    maskedContent = content;
+                }
+            }
+            helper.assertTrue(maskedContent != null,
+                "sendAllDataToRemote() must emit ClientboundContainerSetContentPacket");
+            int hotbar0MenuIdx = bob.inventoryMenu.slots.stream()
+                .filter(s -> s.container == bob.getInventory() && s.getContainerSlot() == 0)
+                .findFirst()
+                .orElseThrow()
+                .index;
+            int hotbar1MenuIdx = bob.inventoryMenu.slots.stream()
+                .filter(s -> s.container == bob.getInventory() && s.getContainerSlot() == 1)
+                .findFirst()
+                .orElseThrow()
+                .index;
+            helper.assertTrue(maskedContent.items().get(hotbar0MenuIdx).getDamageValue() == 0,
+                "Masked ContainerSetContentPacket must preserve undamaged pickaxe in slot 0 during mining");
+            helper.assertTrue(maskedContent.items().get(hotbar1MenuIdx).is(Items.COBBLESTONE)
+                    && maskedContent.items().get(hotbar1MenuIdx).getCount() == 5,
+                "Masked ContainerSetContentPacket must still sync non-protected slot 1");
+
+            // Replacing slot 0 with a different item type must sync immediately (not ghost-mine)
+            ItemStack dirt = new ItemStack(Items.DIRT, 1);
+            alice.getInventory().setItem(0, dirt);
+            helper.assertFalse(HiveMindManager.shouldDeferSharedHeldItemUpdate(
+                    bob,
+                    new ClientboundSetPlayerInventoryPacket(0, dirt)
+                ),
+                "Replacing the held tool with a different item must sync immediately");
+
+            ((HiveServerPlayerGameModeAccess) bob.gameMode).oimr$setDestroyingBlockForTest(false);
+            for (ItemStack rangedWeapon : List.of(new ItemStack(Items.BOW), new ItemStack(Items.CROSSBOW))) {
+                alice.getInventory().setItem(0, rangedWeapon);
+                bob.containerMenu.broadcastChanges();
+                bob.startUsingItem(InteractionHand.MAIN_HAND);
+
+                ItemStack changedWeapon = rangedWeapon.copy();
+                changedWeapon.setDamageValue(1);
+                helper.assertTrue(HiveMindManager.shouldDeferSharedHeldItemUpdate(
+                        bob,
+                        new ClientboundSetPlayerInventoryPacket(0, changedWeapon)
+                    ),
+                    rangedWeapon.getHoverName().getString()
+                        + " must keep charging when another player updates the same shared item");
+                bob.stopUsingItem();
+            }
+
+            ItemStack lastUsePickaxe = new ItemStack(Items.IRON_PICKAXE);
+            lastUsePickaxe.setDamageValue(lastUsePickaxe.getMaxDamage() - 1);
+            alice.getInventory().setItem(0, lastUsePickaxe);
+            bob.containerMenu.broadcastChanges();
+            ((HiveServerPlayerGameModeAccess) bob.gameMode).oimr$setDestroyingBlockForTest(true);
+            helper.assertFalse(HiveMindManager.shouldDeferSharedHeldItemUpdate(
+                    bob,
+                    new ClientboundSetPlayerInventoryPacket(0, ItemStack.EMPTY)
+                ),
+                "The authoritative empty stack must be sent immediately when the shared tool breaks");
+
+            alice.getInventory().setItem(0, ItemStack.EMPTY);
+            helper.assertFalse(HiveMindManager.shouldDeferSharedHeldItemUpdate(
+                    bob,
+                    new ClientboundSetPlayerInventoryPacket(0, lastUsePickaxe)
+                ),
+                "A stale usable packet must never revive a shared item that is empty on the server");
+
+            helper.succeed();
+        } finally {
+            ((HiveServerPlayerGameModeAccess) bob.gameMode).oimr$setDestroyingBlockForTest(false);
+            bob.stopUsingItem();
+            OIMRConfig.setSyncHotbar(previousHotbarSync);
             cleanupPlayers(server, alice, bob);
         }
     }
@@ -489,7 +646,11 @@ public class HiveMindGameTests {
         ServerLevel level = helper.getLevel();
         ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice9");
         ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob9");
+        BlockPos bobPos = helper.absolutePos(new BlockPos(2, 2, 2));
         try {
+            alice.teleportTo(bobPos.getX() + 0.5, bobPos.getY(), bobPos.getZ() + 0.5);
+            bob.teleportTo(bobPos.getX() + 0.5, bobPos.getY(), bobPos.getZ() + 0.5);
+
             alice.setAirSupply(120);
             helper.assertTrue(bob.getAirSupply() == 120, "Bob air supply should sync to 120, got " + bob.getAirSupply());
 
@@ -497,9 +658,9 @@ public class HiveMindGameTests {
             helper.assertTrue(bob.getRemainingFireTicks() == 80,
                 "Bob fire ticks should sync to 80, got " + bob.getRemainingFireTicks());
 
-            BlockPos bobPos = bob.blockPosition();
             level.setBlock(bobPos, Blocks.WATER.defaultBlockState(), 3);
             bob.baseTick();
+            helper.assertTrue(bob.isInWater(), "Bob must detect water in loaded test area");
             bob.clearFire();
             level.setBlock(bobPos, Blocks.AIR.defaultBlockState(), 3);
             helper.assertTrue(alice.getRemainingFireTicks() <= 0,
@@ -514,6 +675,7 @@ public class HiveMindGameTests {
 
             helper.succeed();
         } finally {
+            level.setBlock(bobPos, Blocks.AIR.defaultBlockState(), 3);
             cleanupPlayers(server, alice, bob);
         }
     }
@@ -2308,6 +2470,1507 @@ public class HiveMindGameTests {
         } finally {
             OIMRConfig.setAffinityPercent(prevAffinity);
             OIMRConfig.setHungerWeight(prevHungerWeight);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testAbsorptionGoldenAppleExpiresBelow90Seconds(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice37");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob37");
+        try {
+            // 1. 100% Affinity: Absorption at 1805 ticks must tick past 1800 (1m30s) and eventually expire
+            OIMRConfig.setAffinityPercent(100);
+            alice.addEffect(new MobEffectInstance(MobEffects.ABSORPTION, 1805, 0));
+            HiveMindManager.onEndServerTick(server);
+
+            for (int i = 0; i < 10; i++) {
+                alice.baseTick();
+                bob.baseTick();
+                HiveMindManager.onEndServerTick(server);
+            }
+            MobEffectInstance aliceEff = alice.getEffect(MobEffects.ABSORPTION);
+            MobEffectInstance bobEff = bob.getEffect(MobEffects.ABSORPTION);
+            helper.assertTrue(aliceEff != null && aliceEff.getDuration() == 1795,
+                "Alice Absorption must advance past 1800 ticks (expected 1795, got " + (aliceEff != null ? aliceEff.getDuration() : -1) + ")");
+            helper.assertTrue(bobEff != null && bobEff.getDuration() == 1795,
+                "Bob Absorption must advance past 1800 ticks (expected 1795, got " + (bobEff != null ? bobEff.getDuration() : -1) + ")");
+
+            // Verify full expiration clears absorption shield on both players
+            alice.removeEffect(MobEffects.ABSORPTION);
+            alice.addEffect(new MobEffectInstance(MobEffects.ABSORPTION, 2, 0));
+            HiveMindManager.onEndServerTick(server);
+            alice.baseTick();
+            bob.baseTick();
+            HiveMindManager.onEndServerTick(server);
+            alice.baseTick();
+            bob.baseTick();
+            HiveMindManager.onEndServerTick(server);
+            helper.assertFalse(alice.hasEffect(MobEffects.ABSORPTION) || bob.hasEffect(MobEffects.ABSORPTION),
+                "Absorption must cleanly expire from both players at 0 ticks");
+            helper.assertTrue(alice.getAbsorptionAmount() == 0.0F && bob.getAbsorptionAmount() == 0.0F,
+                "Absorption shield must return to 0.0F after expiration");
+
+            // 2. 50% Affinity: periodic 600-tick client resync must NOT re-grant absorption to teammates
+            OIMRConfig.setAffinityPercent(50);
+            alice.addEffect(new MobEffectInstance(MobEffects.ABSORPTION, 1802, 0));
+            bob.removeEffect(MobEffects.ABSORPTION);
+            bob.setAbsorptionAmount(0.0F);
+            for (int i = 0; i < 4; i++) {
+                alice.baseTick();
+            }
+            helper.assertFalse(bob.hasEffect(MobEffects.ABSORPTION) || bob.getAbsorptionAmount() > 0.0F,
+                "Periodic 600-tick effect update on Alice must not re-grant Absorption to Bob at 50% affinity");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testLavaAccumulatesPerPlayerWhileFireIsCappedAtOnePlayer(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice38");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob38");
+        ServerPlayer charlie = spawnTestPlayer(server, level, "HiveCharlie38");
+        try {
+            OIMRConfig.setAffinityPercent(100);
+            alice.setHealth(20.0F);
+            HiveMindManager.onEndServerTick(server);
+
+            // Every exposed player contributes lava damage: 3 * 4.0F = 12.0F shared damage.
+            alice.hurtServer(level, level.damageSources().lava(), 4.0F);
+            bob.hurtServer(level, level.damageSources().lava(), 4.0F);
+            charlie.hurtServer(level, level.damageSources().lava(), 4.0F);
+            helper.assertTrue(Math.abs(alice.getHealth() - 8.0F) < 0.01F
+                    && Math.abs(bob.getHealth() - 8.0F) < 0.01F
+                    && Math.abs(charlie.getHealth() - 8.0F) < 0.01F,
+                "3 players in lava simultaneously must deal 3x lava damage (8.0 HP), got alice="
+                    + alice.getHealth() + ", bob=" + bob.getHealth() + ", charlie=" + charlie.getHealth());
+
+            // Fire is group-scoped: the same contact/fire tick reported by all 3 members deals only 1.0F total.
+            alice.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            bob.damageCooldownTime = 0;
+            charlie.damageCooldownTime = 0;
+            HiveMind hive = HiveMindData.get(server).getIfPresent(HiveMindData.DEFAULT_HIVE_ID);
+            helper.assertTrue(hive != null, "Default hive must exist");
+            hive.resetVitalsForRespawn(20.0F);
+            HiveMindManager.resyncPlayerFromHive(alice);
+            HiveMindManager.resyncPlayerFromHive(bob);
+            HiveMindManager.resyncPlayerFromHive(charlie);
+
+            alice.hurtServer(level, level.damageSources().inFire(), 1.0F);
+            bob.hurtServer(level, level.damageSources().inFire(), 1.0F);
+            charlie.hurtServer(level, level.damageSources().inFire(), 1.0F);
+            helper.assertTrue(Math.abs(alice.getHealth() - 19.0F) < 0.01F,
+                "3 simultaneous fire reports must deal at most 1x fire damage (19.0 HP), got " + alice.getHealth());
+
+            // Fire and lava use independent accounting: one fire hit + three lava hits = 13.0F total.
+            alice.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            bob.damageCooldownTime = 0;
+            charlie.damageCooldownTime = 0;
+            hive.resetVitalsForRespawn(20.0F);
+            HiveMindManager.resyncPlayerFromHive(alice);
+            HiveMindManager.resyncPlayerFromHive(bob);
+            HiveMindManager.resyncPlayerFromHive(charlie);
+
+            alice.hurtServer(level, level.damageSources().inFire(), 1.0F);
+            alice.damageCooldownTime = 0;
+            bob.damageCooldownTime = 0;
+            charlie.damageCooldownTime = 0;
+            alice.hurtServer(level, level.damageSources().lava(), 4.0F);
+            bob.hurtServer(level, level.damageSources().lava(), 4.0F);
+            charlie.hurtServer(level, level.damageSources().lava(), 4.0F);
+            helper.assertTrue(Math.abs(alice.getHealth() - 7.0F) < 0.01F,
+                "One fire hit plus 3 lava hits must deal 13.0 total damage (7.0 HP), got "
+                    + alice.getHealth());
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob, charlie);
+        }
+    }
+
+    @GameTest
+    public void testPeacefulRegenDoesNotScaleWithPlayerCount(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        Difficulty prevDifficulty = server.getWorldData().getDifficulty();
+        boolean prevNaturalRegen = level.getGameRules().get(GameRules.NATURAL_HEALTH_REGENERATION);
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice39");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob39");
+        ServerPlayer charlie = spawnTestPlayer(server, level, "HiveCharlie39");
+        try {
+            server.setDifficulty(Difficulty.PEACEFUL, true);
+            level.getGameRules().set(GameRules.NATURAL_HEALTH_REGENERATION, true, server);
+
+            // 1. 100% Affinity: 3 hurt players at tickCount=20 -> only +1.0 HP, +1 food, +1.0 saturation
+            OIMRConfig.setAffinityPercent(100);
+            alice.setHealth(10.0F);
+            alice.getFoodData().setFoodLevel(10);
+            alice.getFoodData().setSaturation(0.0F);
+            HiveMindManager.onEndServerTick(server);
+
+            alice.tickCount = 20;
+            bob.tickCount = 20;
+            charlie.tickCount = 20;
+            alice.aiStep();
+            bob.aiStep();
+            charlie.aiStep();
+
+            helper.assertTrue(Math.abs(alice.getHealth() - 11.0F) < 0.01F,
+                "Peaceful regen at 100% affinity with 3 players must heal +1.0 HP (11.0), got " + alice.getHealth());
+            helper.assertTrue(alice.getFoodData().getFoodLevel() == 11,
+                "Peaceful regen with 3 players must restore +1 food (11), got " + alice.getFoodData().getFoodLevel());
+            helper.assertTrue(Math.abs(alice.getFoodData().getSaturationLevel() - 1.0F) < 0.01F,
+                "Peaceful regen with 3 players must restore +1.0 saturation (1.0), got " + alice.getFoodData().getSaturationLevel());
+
+            // 2. 50% Affinity: Alice and Bob each heal +1.0 HP (NOT +1.5 HP!), food +1
+            OIMRConfig.setAffinityPercent(50);
+            alice.setHealth(10.0F);
+            bob.setHealth(10.0F);
+            alice.getFoodData().setFoodLevel(10);
+            alice.tickCount = 40;
+            bob.tickCount = 40;
+            charlie.tickCount = 40;
+            alice.aiStep();
+            bob.aiStep();
+            charlie.aiStep();
+
+            helper.assertTrue(Math.abs(alice.getHealth() - 11.0F) < 0.01F
+                    && Math.abs(bob.getHealth() - 11.0F) < 0.01F,
+                "Peaceful regen at 50% affinity must heal each player +1.0 HP without cascading (got alice="
+                    + alice.getHealth() + ", bob=" + bob.getHealth() + ")");
+            helper.assertTrue(alice.getFoodData().getFoodLevel() == 11,
+                "Peaceful food regen at 50% affinity must still stay 1x (11), got " + alice.getFoodData().getFoodLevel());
+
+            helper.succeed();
+        } finally {
+            server.setDifficulty(prevDifficulty, true);
+            level.getGameRules().set(GameRules.NATURAL_HEALTH_REGENERATION, prevNaturalRegen, server);
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob, charlie);
+        }
+    }
+
+    @GameTest
+    public void testSharedEnderPearlTeleportAndToggle(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        boolean prevPearl = OIMRConfig.isSharedEnderPearlEnabled();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice40");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob40");
+        ServerPlayer spectator = spawnTestPlayer(server, level, "HiveSpec40");
+        BlockPos padCenter = helper.absolutePos(new BlockPos(2, 2, 2));
+        try {
+            OIMRConfig.setAffinityPercent(100);
+            OIMRConfig.setSharedEnderPearl(true);
+            spectator.setGameMode(GameType.SPECTATOR);
+
+            level.setBlockAndUpdate(padCenter.below(), Blocks.STONE.defaultBlockState());
+            alice.teleportTo(padCenter.getX() + 0.5, padCenter.getY() + 10.0, padCenter.getZ() + 0.5);
+            bob.teleportTo(padCenter.getX() + 40.5, padCenter.getY() + 2.0, padCenter.getZ() + 40.5);
+            Vec3 specPos = new Vec3(padCenter.getX() + 80.5, padCenter.getY() + 5.0, padCenter.getZ() + 80.5);
+            spectator.teleportTo(specPos.x, specPos.y, specPos.z);
+
+            ThrownEnderpearl pearl = new ThrownEnderpearl(level, alice, new ItemStack(Items.ENDER_PEARL));
+            pearl.setPos(padCenter.getX() + 0.5, padCenter.getY() + 0.5, padCenter.getZ() + 0.5);
+            pearl.setDeltaMovement(0.0, -1.0, 0.0);
+            level.addFreshEntity(pearl);
+            for (int i = 0; i < 5 && !pearl.isRemoved(); i++) {
+                pearl.tick();
+            }
+
+            helper.assertTrue(pearl.isRemoved(), "Ender pearl must have impacted and been discarded");
+            helper.assertTrue(alice.position().distanceTo(bob.position()) < 1.0D,
+                "Bob must teleport to the same landing position as Alice (dist=" + alice.position().distanceTo(bob.position()) + ")");
+            helper.assertTrue(spectator.position().distanceTo(specPos) < 0.5D,
+                "Spectator teammate must NOT be teleported by shared Ender Pearl");
+            helper.assertTrue(Math.abs(alice.getHealth() - 15.0F) < 0.01F && Math.abs(bob.getHealth() - 15.0F) < 0.01F,
+                "Ender pearl must deal 1x 5.0 damage shared across hive (15.0 HP), got alice="
+                    + alice.getHealth() + ", bob=" + bob.getHealth());
+
+            // Toggle OFF -> Bob stays put
+            OIMRConfig.setSharedEnderPearl(false);
+            Vec3 bobStayPos = new Vec3(padCenter.getX() + 40.5, padCenter.getY() + 2.0, padCenter.getZ() + 40.5);
+            bob.teleportTo(bobStayPos.x, bobStayPos.y, bobStayPos.z);
+
+            ThrownEnderpearl pearl2 = new ThrownEnderpearl(level, alice, new ItemStack(Items.ENDER_PEARL));
+            pearl2.setPos(padCenter.getX() + 0.5, padCenter.getY() + 0.5, padCenter.getZ() + 0.5);
+            pearl2.setDeltaMovement(0.0, -1.0, 0.0);
+            level.addFreshEntity(pearl2);
+            for (int i = 0; i < 5 && !pearl2.isRemoved(); i++) {
+                pearl2.tick();
+            }
+            helper.assertTrue(bob.position().distanceTo(bobStayPos) < 0.5D,
+                "When sharedEnderPearl is OFF, Bob must not teleport with Alice");
+
+            helper.succeed();
+        } finally {
+            level.setBlockAndUpdate(padCenter.below(), Blocks.AIR.defaultBlockState());
+            OIMRConfig.setSharedEnderPearl(prevPearl);
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob, spectator);
+        }
+    }
+
+    @GameTest
+    public void testSharedPortalTeleportAndToggle(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel overworld = server.overworld();
+        ServerLevel endLevel = server.getLevel(Level.END);
+        boolean prevPortals = OIMRConfig.isSharedPortalsEnabled();
+        ServerPlayer alice = spawnTestPlayer(server, overworld, "HiveAlice41");
+        ServerPlayer bob = spawnTestPlayer(server, overworld, "HiveBob41");
+        try {
+            helper.assertTrue(endLevel != null, "End dimension must exist");
+            OIMRConfig.setSharedPortals(true);
+
+            alice.setPos(10.0, 70.0, 10.0);
+            bob.setPos(200.0, 70.0, 200.0);
+            alice.setPortalCooldown(0);
+            bob.setPortalCooldown(0);
+            alice.setAsInsidePortal((Portal) Blocks.END_PORTAL, alice.blockPosition());
+            alice.baseTick();
+
+            helper.assertTrue(alice.level().dimension() == Level.END,
+                "Alice must enter The End via End Portal");
+            helper.assertTrue(bob.level().dimension() == Level.END,
+                "Bob must teleport into The End together with Alice");
+            helper.assertTrue(alice.position().distanceTo(bob.position()) < 1.0D,
+                "Alice and Bob must land at the same End portal destination");
+            helper.assertTrue(bob.isOnPortalCooldown(),
+                "Bob must receive portal cooldown to prevent portal bounce loops");
+
+            // Toggle OFF -> only Alice teleports
+            OIMRConfig.setSharedPortals(false);
+            alice.teleportTo(overworld, 10.0, 70.0, 10.0, java.util.Set.of(), 0.0F, 0.0F, false);
+            bob.teleportTo(overworld, 200.0, 70.0, 200.0, java.util.Set.of(), 0.0F, 0.0F, false);
+            alice.setPortalCooldown(0);
+            bob.setPortalCooldown(0);
+            alice.setAsInsidePortal((Portal) Blocks.END_PORTAL, alice.blockPosition());
+            alice.baseTick();
+
+            helper.assertTrue(alice.level().dimension() == Level.END, "Alice must enter The End");
+            helper.assertTrue(bob.level().dimension() == Level.OVERWORLD,
+                "When sharedPortals is OFF, Bob must stay in Overworld");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setSharedPortals(prevPortals);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testUnderwaterSyncPayloadAndNewConfigDefaults(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        boolean prevPearl = OIMRConfig.isSharedEnderPearlEnabled();
+        boolean prevPortals = OIMRConfig.isSharedPortalsEnabled();
+        boolean prevUnderwater = OIMRConfig.isUnderwaterMuffleEnabled();
+        boolean prevMobSounds = OIMRConfig.isSharedMobSoundsEnabled();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        ServerPlayer alice = spawnTestPlayer(server, level, "HiveAlice41");
+        ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob41");
+        BlockPos waterPos = helper.absolutePos(new BlockPos(2, 2, 2));
+        BlockPos eyeWaterPos = waterPos.above();
+        try {
+            OIMRConfig.setAffinityPercent(100);
+            OIMRConfig.setUnderwaterMuffle(true);
+            OIMRUnderwaterSyncPayload payload = OIMRUnderwaterSyncPayload.fromState(true);
+            FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
+            OIMRUnderwaterSyncPayload.STREAM_CODEC.encode(buf, payload);
+            OIMRUnderwaterSyncPayload decoded = OIMRUnderwaterSyncPayload.STREAM_CODEC.decode(buf);
+            helper.assertTrue(decoded.enabled() && decoded.hiveUnderwater(),
+                "Underwater sync payload must round-trip enabled=true, hiveUnderwater=true");
+
+            // Submerge Alice (both feet & eye blocks) and keep Bob on land
+            level.setBlock(waterPos, Blocks.WATER.defaultBlockState(), 3);
+            level.setBlock(eyeWaterPos, Blocks.WATER.defaultBlockState(), 3);
+            alice.teleportTo(waterPos.getX() + 0.5, waterPos.getY(), waterPos.getZ() + 0.5);
+            bob.teleportTo(waterPos.getX() + 6.5, waterPos.getY(), waterPos.getZ() + 0.5);
+            alice.baseTick();
+            bob.baseTick();
+            helper.assertTrue(alice.isEyeInFluid(FluidTags.WATER),
+                "Alice must detect eye-in-water after baseTick in water column");
+            HiveMindManager.onEndServerTick(server);
+            HiveMind hive = HiveMindManager.getHiveForPlayer(alice);
+            helper.assertTrue(hive != null && hive.isAnyMemberUnderwater(),
+                "Hive underwater state must activate when an alive non-spectator member's eye is in water");
+
+            // Spectator underwater must not trigger hive underwater state
+            alice.setGameMode(GameType.SPECTATOR);
+            HiveMindManager.onEndServerTick(server);
+            helper.assertFalse(hive.isAnyMemberUnderwater(),
+                "Spectator member in water must not activate hive underwater state");
+            alice.setGameMode(GameType.SURVIVAL);
+
+            // Dead teammate on join gets updated state without throwing or clearing alive underwater state
+            bob.setHealth(0.0F);
+            HiveMindManager.syncUnderwaterOnJoin(bob);
+            helper.assertTrue(hive.isAnyMemberUnderwater(),
+                "syncUnderwaterOnJoin for a dead teammate must keep active hive underwater state");
+            bob.setHealth(20.0F);
+
+            // Removing water resets hive underwater state cleanly
+            level.setBlock(waterPos, Blocks.AIR.defaultBlockState(), 3);
+            level.setBlock(eyeWaterPos, Blocks.AIR.defaultBlockState(), 3);
+            alice.baseTick();
+            HiveMindManager.onEndServerTick(server);
+            helper.assertFalse(hive.isAnyMemberUnderwater(),
+                "Hive underwater state must clear once no alive member has eyes in water");
+
+            OIMRConfig.setSharedEnderPearl(false);
+            OIMRConfig.setSharedPortals(false);
+            OIMRConfig.setUnderwaterMuffle(false);
+            OIMRConfig.setSharedMobSounds(false);
+            OIMRConfig.load();
+            helper.assertFalse(OIMRConfig.isSharedEnderPearlEnabled()
+                    || OIMRConfig.isSharedPortalsEnabled()
+                    || OIMRConfig.isUnderwaterMuffleEnabled()
+                    || OIMRConfig.isSharedMobSoundsEnabled(),
+                "New config toggles must persist false across OIMRConfig.load()");
+
+            helper.succeed();
+        } finally {
+            level.setBlock(waterPos, Blocks.AIR.defaultBlockState(), 3);
+            level.setBlock(eyeWaterPos, Blocks.AIR.defaultBlockState(), 3);
+            OIMRConfig.setSharedEnderPearl(prevPearl);
+            OIMRConfig.setSharedPortals(prevPortals);
+            OIMRConfig.setUnderwaterMuffle(prevUnderwater);
+            OIMRConfig.setSharedMobSounds(prevMobSounds);
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testReplicatedMobSoundsOrientationDistanceProbabilityAndAffinity(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        boolean prevMobSounds = OIMRConfig.isSharedMobSoundsEnabled();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        TestPlayerHandle aliceHandle = spawnTestPlayerWithChannel(server, level, "HiveAlice42");
+        TestPlayerHandle bobHandle = spawnTestPlayerWithChannel(server, level, "HiveBob42");
+        TestPlayerHandle carolHandle = spawnTestPlayerWithChannel(server, level, "HiveCarol42");
+        ServerPlayer alice = aliceHandle.player();
+        ServerPlayer bob = bobHandle.player();
+        ServerPlayer carol = carolHandle.player();
+        Zombie zombie = EntityTypes.ZOMBIE.create(level, EntitySpawnReason.COMMAND);
+        try {
+            helper.assertTrue(zombie != null, "Zombie must spawn");
+            OIMRConfig.setSharedMobSounds(true);
+            OIMRConfig.setAffinityPercent(50);
+
+            // Alice and Carol are both near the Zombie; Bob is 200 blocks away.
+            // A single sound must NEVER be duplicated to Bob across the two nearby listeners.
+            alice.teleportTo(0.0, 64.0, 0.0);
+            carol.teleportTo(2.0, 64.0, 0.0);
+            bob.teleportTo(200.0, 64.0, 0.0);
+            zombie.setPos(4.0, 64.0, 0.0);
+            level.addFreshEntity(zombie);
+
+            aliceHandle.channel().outboundMessages().clear();
+            carolHandle.channel().outboundMessages().clear();
+            bobHandle.channel().outboundMessages().clear();
+            for (int i = 0; i < 40; i++) {
+                zombie.playAmbientSound();
+            }
+
+            List<ClientboundSoundPacket> replicated = new java.util.ArrayList<>();
+            Object msg;
+            while ((msg = bobHandle.channel().outboundMessages().poll()) != null) {
+                if (msg instanceof ClientboundSoundPacket sp && sp.getSource() == SoundSource.HOSTILE) {
+                    replicated.add(sp);
+                }
+            }
+            long carolTotal = 0;
+            long carolReplicated = 0;
+            while ((msg = carolHandle.channel().outboundMessages().poll()) != null) {
+                if (msg instanceof ClientboundSoundPacket sp && sp.getSource() == SoundSource.HOSTILE) {
+                    carolTotal++;
+                    if (Math.abs(sp.getVolume() - 0.5F) < 0.01F) {
+                        carolReplicated++;
+                    }
+                }
+            }
+
+            helper.assertTrue(!replicated.isEmpty() && replicated.size() <= 35,
+                "With 1/3 chance over 40 zombie sounds and 2 nearby listeners, Bob must receive replicated sounds without per-listener duplication (got "
+                    + replicated.size() + ")");
+            helper.assertTrue(carolTotal == 40 && carolReplicated == 0,
+                "Nearby teammate Carol inside native range must receive only the 40 native packets and 0 replicated packets (total="
+                    + carolTotal + ", replicated=" + carolReplicated + ")");
+
+            ClientboundSoundPacket sample = replicated.getFirst();
+            Vec3 soundPos = new Vec3(sample.getX(), sample.getY(), sample.getZ());
+            double distFromBob = soundPos.distanceTo(bob.position());
+            helper.assertTrue(Math.abs(distFromBob - 2.0D) < 0.05D,
+                "Replicated sound distance from Bob must equal closest listener (Carol) distance to mob (2.0), got " + distFromBob);
+            helper.assertTrue(sample.getX() < bob.getX() && Math.abs(sample.getX() - 198.0D) < 0.05D,
+                "Replicated sound orientation must point toward the mob (West of Bob at x=198), got x=" + sample.getX());
+            helper.assertTrue(Math.abs(sample.getVolume() - 0.5F) < 0.05F,
+                "Replicated sound volume must be scaled by 50% affinity (0.5), got " + sample.getVolume());
+
+            // Dead nearby player must NOT originate replicated sounds
+            carol.teleportTo(500.0, 64.0, 0.0);
+            alice.setHealth(0.0F);
+            bobHandle.channel().outboundMessages().clear();
+            for (int i = 0; i < 20; i++) {
+                zombie.playAmbientSound();
+            }
+            int deadSourceCount = 0;
+            while ((msg = bobHandle.channel().outboundMessages().poll()) != null) {
+                if (msg instanceof ClientboundSoundPacket sp && sp.getSource() == SoundSource.HOSTILE) {
+                    deadSourceCount++;
+                }
+            }
+            helper.assertTrue(deadSourceCount == 0,
+                "Dead teammate near mob must not originate replicated mob sounds (got " + deadSourceCount + ")");
+            alice.setHealth(20.0F);
+
+            // Toggle OFF -> 0 replicated sounds
+            OIMRConfig.setSharedMobSounds(false);
+            bobHandle.channel().outboundMessages().clear();
+            for (int i = 0; i < 20; i++) {
+                zombie.playAmbientSound();
+            }
+            int offCount = 0;
+            while ((msg = bobHandle.channel().outboundMessages().poll()) != null) {
+                if (msg instanceof ClientboundSoundPacket sp && sp.getSource() == SoundSource.HOSTILE) {
+                    offCount++;
+                }
+            }
+            helper.assertTrue(offCount == 0,
+                "When sharedMobSounds is OFF, Bob must receive 0 replicated mob sounds (got " + offCount + ")");
+
+            helper.succeed();
+        } finally {
+            if (zombie != null) {
+                zombie.discard();
+            }
+            OIMRConfig.setSharedMobSounds(prevMobSounds);
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob, carol);
+        }
+    }
+
+    @GameTest
+    public void testRandomDeathLootDefaultConfigCommandAndScatter(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel overworld = server.overworld();
+        ServerLevel nether = server.getLevel(Level.NETHER);
+        boolean prevRandomLoot = OIMRConfig.isRandomDeathLootEnabled();
+        boolean prevExcludeCreative = OIMRConfig.isExcludeCreativeFromDeathEnabled();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        TestPlayerHandle aliceHandle = spawnTestPlayerWithChannel(server, overworld, "HiveAlice43");
+        TestPlayerHandle bobHandle = spawnTestPlayerWithChannel(server, overworld, "HiveBob43");
+        TestPlayerHandle charlieHandle = spawnTestPlayerWithChannel(server, overworld, "HiveCharlie43");
+        ServerPlayer alice = aliceHandle.player();
+        ServerPlayer bob = bobHandle.player();
+        ServerPlayer creativeCharlie = charlieHandle.player();
+        try {
+            helper.assertTrue(nether != null, "Nether dimension must exist");
+
+            // 1. Default enabled + persistence + command toggle
+            helper.assertTrue(OIMRConfig.isRandomDeathLootEnabled(),
+                "randomDeathLoot must be enabled by default");
+            server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "oimr settings randomDeathLoot false");
+            helper.assertFalse(OIMRConfig.isRandomDeathLootEnabled(),
+                "Command /oimr settings randomDeathLoot false must disable randomDeathLoot");
+            OIMRConfig.load();
+            helper.assertFalse(OIMRConfig.isRandomDeathLootEnabled(),
+                "randomDeathLoot=false must persist across OIMRConfig.load()");
+
+            OIMRConfig.setAffinityPercent(100);
+            OIMRConfig.setExcludeCreativeFromDeath(true);
+            creativeCharlie.setGameMode(GameType.CREATIVE);
+
+            BlockPos origin = helper.absolutePos(new BlockPos(2, 2, 2));
+            Vec3 alicePos = new Vec3(origin.getX() + 0.5, origin.getY() + 2.0, origin.getZ() + 0.5);
+            Vec3 bobPos = new Vec3(origin.getX() + 40.5, origin.getY() + 2.0, origin.getZ() + 0.5);
+            Vec3 charliePos = new Vec3(origin.getX() + 80.5, origin.getY() + 2.0, origin.getZ() + 0.5);
+            Vec3 netherBobPos = new Vec3(120.5, 70.0, 0.5);
+            overworld.getChunk(BlockPos.containing(alicePos));
+            overworld.getChunk(BlockPos.containing(bobPos));
+            overworld.getChunk(BlockPos.containing(charliePos));
+            int netherChunkX = BlockPos.containing(netherBobPos).getX() >> 4;
+            int netherChunkZ = BlockPos.containing(netherBobPos).getZ() >> 4;
+            nether.setChunkForced(netherChunkX, netherChunkZ, true);
+            server.managedBlock(() -> {
+                nether.tick(() -> true);
+                return nether.isPositionEntityTicking(BlockPos.containing(netherBobPos));
+            });
+            java.util.function.Consumer<ServerPlayer> flushPlayerChunks = p -> {
+                ServerLevel lvl = p.level();
+                lvl.getChunk(p.blockPosition());
+                lvl.getChunkSource().chunkMap.move(p);
+                p.connection.chunkSender.onChunkBatchReceivedByClient(64.0F);
+                for (int i = 0; i < 4; i++) {
+                    p.connection.chunkSender.sendNextChunks(p);
+                    p.connection.chunkSender.onChunkBatchReceivedByClient(64.0F);
+                }
+                lvl.getChunkSource().chunkMap.move(p);
+            };
+
+            alice.teleportTo(overworld, alicePos.x, alicePos.y, alicePos.z, java.util.Set.of(), 0.0F, 0.0F, false);
+            bob.teleportTo(overworld, bobPos.x, bobPos.y, bobPos.z, java.util.Set.of(), 0.0F, 0.0F, false);
+            creativeCharlie.teleportTo(overworld, charliePos.x, charliePos.y, charliePos.z, java.util.Set.of(), 0.0F, 0.0F, false);
+            flushPlayerChunks.accept(alice);
+            flushPlayerChunks.accept(bob);
+            flushPlayerChunks.accept(creativeCharlie);
+
+            java.util.function.Function<EmbeddedChannel, List<Packet<?>>> drainPackets = channel -> {
+                List<Packet<?>> out = new java.util.ArrayList<>();
+                Object msg;
+                while ((msg = channel.outboundMessages().poll()) != null) {
+                    if (msg instanceof ClientboundBundlePacket bundle) {
+                        for (Packet<?> sub : bundle.subPackets()) {
+                            out.add(sub);
+                        }
+                    } else if (msg instanceof Packet<?> packet) {
+                        out.add(packet);
+                    }
+                }
+                return out;
+            };
+
+            Runnable clearDroppedEntities = () -> {
+                for (Vec3 p : List.of(alicePos, bobPos, charliePos)) {
+                    AABB box = new AABB(p.x - 10, p.y - 10, p.z - 10, p.x + 10, p.y + 10, p.z + 10);
+                    overworld.getEntitiesOfClass(ItemEntity.class, box).forEach(Entity::discard);
+                    overworld.getEntitiesOfClass(ExperienceOrb.class, box).forEach(Entity::discard);
+                }
+                AABB netherBox = new AABB(netherBobPos.x - 10, netherBobPos.y - 10, netherBobPos.z - 10, netherBobPos.x + 10, netherBobPos.y + 10, netherBobPos.z + 10);
+                nether.getEntitiesOfClass(ItemEntity.class, netherBox).forEach(Entity::discard);
+                nether.getEntitiesOfClass(ExperienceOrb.class, netherBox).forEach(Entity::discard);
+            };
+
+            // 2. Toggle OFF -> loot always drops at original victim (Alice) and remains visible on death screen
+            clearDroppedEntities.run();
+            aliceHandle.channel().outboundMessages().clear();
+            bobHandle.channel().outboundMessages().clear();
+            charlieHandle.channel().outboundMessages().clear();
+            alice.getInventory().setItem(0, new ItemStack(Items.DIAMOND, 3));
+            alice.getInventory().setItem(9, new ItemStack(Items.EMERALD, 4));
+            alice.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.IRON_HELMET));
+            alice.setItemSlot(EquipmentSlot.OFFHAND, new ItemStack(Items.SHIELD));
+            alice.setExperienceLevels(10);
+
+            alice.hurtServer(overworld, overworld.damageSources().generic(), 50.0F);
+            helper.assertTrue(alice.isDeadOrDying() && bob.isDeadOrDying(), "Both Alice and Bob must die");
+            helper.assertFalse(creativeCharlie.isDeadOrDying(), "Creative Charlie must survive");
+            long offAliceAdds = drainPackets.apply(aliceHandle.channel()).stream()
+                .filter(p -> p instanceof ClientboundAddEntityPacket add && add.getType() == EntityTypes.ITEM)
+                .count();
+            helper.assertTrue(offAliceAdds == 4,
+                "With randomDeathLoot OFF, Alice must still see all 4 dropped item entities (got " + offAliceAdds + ")");
+
+            AABB aliceBox = new AABB(alicePos.x - 6, alicePos.y - 6, alicePos.z - 6, alicePos.x + 6, alicePos.y + 6, alicePos.z + 6);
+            AABB bobBox = new AABB(bobPos.x - 6, bobPos.y - 6, bobPos.z - 6, bobPos.x + 6, bobPos.y + 6, bobPos.z + 6);
+            AABB charlieBox = new AABB(charliePos.x - 6, charliePos.y - 6, charliePos.z - 6, charliePos.x + 6, charliePos.y + 6, charliePos.z + 6);
+            AABB netherBobBox = new AABB(netherBobPos.x - 6, netherBobPos.y - 6, netherBobPos.z - 6, netherBobPos.x + 6, netherBobPos.y + 6, netherBobPos.z + 6);
+
+            List<ItemEntity> offItemsAlice = overworld.getEntitiesOfClass(ItemEntity.class, aliceBox);
+            List<ItemEntity> offItemsBob = overworld.getEntitiesOfClass(ItemEntity.class, bobBox);
+            List<ExperienceOrb> offXpAlice = overworld.getEntitiesOfClass(ExperienceOrb.class, aliceBox);
+            List<ExperienceOrb> offXpBob = overworld.getEntitiesOfClass(ExperienceOrb.class, bobBox);
+            helper.assertTrue(offItemsAlice.size() == 4
+                    && offItemsBob.isEmpty()
+                    && !offXpAlice.isEmpty()
+                    && offXpBob.isEmpty(),
+                "With randomDeathLoot OFF, all 4 item stacks and XP must drop at Alice (itemsAlice="
+                    + offItemsAlice.size() + ", itemsBob=" + offItemsBob.size()
+                    + ", xpAlice=" + offXpAlice.size() + ", xpBob=" + offXpBob.size() + ")");
+
+            // 3. Toggle ON -> loot is drawn between Alice and Bob (never Creative Charlie), preserves scatter,
+            //    and hides all ItemEntity/ExperienceOrb entities from dying players until they respawn
+            OIMRConfig.setRandomDeathLoot(true);
+            int aliceWins = 0;
+            int bobWins = 0;
+            boolean verifiedBobScatter = false;
+            boolean verifiedPreExistingHiddenAndRespawnRestored = false;
+            boolean verifiedSurvivingObserverSeesRealLoot = false;
+
+            for (int round = 0; round < 24; round++) {
+                if (alice.isDeadOrDying()) {
+                    alice.connection.handleClientCommand(new ServerboundClientCommandPacket(ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
+                    alice = alice.connection.player;
+                    alice.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
+                }
+                if (bob.isDeadOrDying()) {
+                    bob.connection.handleClientCommand(new ServerboundClientCommandPacket(ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
+                    bob = bob.connection.player;
+                    bob.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
+                }
+
+                alice.teleportTo(overworld, alicePos.x, alicePos.y, alicePos.z, java.util.Set.of(), 0.0F, 0.0F, false);
+                bob.teleportTo(overworld, bobPos.x, bobPos.y, bobPos.z, java.util.Set.of(), 0.0F, 0.0F, false);
+                // Place surviving Charlie near Bob until verified so we confirm living observers still see real drops
+                if (!verifiedSurvivingObserverSeesRealLoot) {
+                    creativeCharlie.teleportTo(overworld, bobPos.x + 2.0, bobPos.y, bobPos.z, java.util.Set.of(), 0.0F, 0.0F, false);
+                } else {
+                    creativeCharlie.teleportTo(overworld, charliePos.x, charliePos.y, charliePos.z, java.util.Set.of(), 0.0F, 0.0F, false);
+                }
+                flushPlayerChunks.accept(alice);
+                flushPlayerChunks.accept(bob);
+                flushPlayerChunks.accept(creativeCharlie);
+                clearDroppedEntities.run();
+
+                // Spawn a pre-existing ground item near Alice on round 0 to verify it is hidden when death occurs
+                ItemEntity preExistingItem = null;
+                if (!verifiedPreExistingHiddenAndRespawnRestored) {
+                    preExistingItem = new ItemEntity(overworld, alicePos.x + 1.0, alicePos.y, alicePos.z, new ItemStack(Items.COBBLESTONE, 1));
+                    overworld.addFreshEntity(preExistingItem);
+                    overworld.getChunkSource().chunkMap.move(alice);
+                }
+
+                aliceHandle.channel().outboundMessages().clear();
+                bobHandle.channel().outboundMessages().clear();
+                charlieHandle.channel().outboundMessages().clear();
+
+                alice.getInventory().setItem(0, new ItemStack(Items.DIAMOND, 2));
+                alice.getInventory().setItem(9, new ItemStack(Items.GOLD_INGOT, 5));
+                alice.setItemSlot(EquipmentSlot.CHEST, new ItemStack(Items.DIAMOND_CHESTPLATE));
+                alice.setItemSlot(EquipmentSlot.OFFHAND, new ItemStack(Items.TORCH, 8));
+                // Also put an item in Bob's inventory crafting grid to verify teammate container-close items go to drawn target
+                bob.inventoryMenu.getCraftSlots().setItem(0, new ItemStack(Items.APPLE, 3));
+                alice.setExperienceLevels(10);
+
+                alice.hurtServer(overworld, overworld.damageSources().generic(), 50.0F);
+
+                List<Packet<?>> alicePackets = drainPackets.apply(aliceHandle.channel());
+                List<Packet<?>> bobPackets = drainPackets.apply(bobHandle.channel());
+                List<Packet<?>> charliePackets = drainPackets.apply(charlieHandle.channel());
+
+                List<ItemEntity> atAlice = overworld.getEntitiesOfClass(ItemEntity.class, aliceBox);
+                List<ItemEntity> atBob = overworld.getEntitiesOfClass(ItemEntity.class, bobBox);
+                List<ItemEntity> atCharlie = overworld.getEntitiesOfClass(ItemEntity.class, charlieBox);
+                List<ExperienceOrb> xpAtAlice = overworld.getEntitiesOfClass(ExperienceOrb.class, aliceBox);
+                List<ExperienceOrb> xpAtBob = overworld.getEntitiesOfClass(ExperienceOrb.class, bobBox);
+
+                helper.assertTrue(atCharlie.isEmpty(), "Surviving Creative Charlie must never receive death loot");
+
+                // Neither Alice nor Bob may receive any ITEM or EXPERIENCE_ORB add packets while on the death screen
+                long aliceHiddenAdds = alicePackets.stream()
+                    .filter(p -> p instanceof ClientboundAddEntityPacket add
+                        && (add.getType() == EntityTypes.ITEM || add.getType() == EntityTypes.EXPERIENCE_ORB))
+                    .count();
+                long bobHiddenAdds = bobPackets.stream()
+                    .filter(p -> p instanceof ClientboundAddEntityPacket add
+                        && (add.getType() == EntityTypes.ITEM || add.getType() == EntityTypes.EXPERIENCE_ORB))
+                    .count();
+                helper.assertTrue(aliceHiddenAdds == 0 && bobHiddenAdds == 0,
+                    "Dying players must not receive any ItemEntity or ExperienceOrb spawn packets while on death screen (alice="
+                        + aliceHiddenAdds + ", bob=" + bobHiddenAdds + ")");
+
+                if (preExistingItem != null) {
+                    final int preId = preExistingItem.getId();
+                    List<Integer> removedForAlice = alicePackets.stream()
+                        .filter(ClientboundRemoveEntitiesPacket.class::isInstance)
+                        .map(ClientboundRemoveEntitiesPacket.class::cast)
+                        .flatMapToInt(p -> p.entityIds().intStream())
+                        .boxed()
+                        .toList();
+                    helper.assertTrue(removedForAlice.contains(preId),
+                        "Pre-existing ground ItemEntity must be hidden (removed from client) when entering death screen");
+                    aliceHandle.channel().outboundMessages().clear();
+                    alice.connection.handleClientCommand(new ServerboundClientCommandPacket(ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
+                    alice = alice.connection.player;
+                    alice.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
+                    alice.teleportTo(overworld, alicePos.x, alicePos.y, alicePos.z, java.util.Set.of(), 0.0F, 0.0F, false);
+                    flushPlayerChunks.accept(alice);
+                    boolean seesPreItemAfterRespawn = drainPackets.apply(aliceHandle.channel()).stream()
+                        .anyMatch(p -> p instanceof ClientboundAddEntityPacket add && add.getId() == preId);
+                    helper.assertTrue(seesPreItemAfterRespawn,
+                        "After respawning, ground items must become visible again");
+                    verifiedPreExistingHiddenAndRespawnRestored = true;
+                    preExistingItem.discard();
+                }
+
+                // Subtract pre-existing item if any (already discarded above)
+                atAlice = overworld.getEntitiesOfClass(ItemEntity.class, aliceBox);
+                boolean droppedAtAliceOnly = atAlice.size() == 5 && atBob.isEmpty() && !xpAtAlice.isEmpty() && xpAtBob.isEmpty();
+                boolean droppedAtBobOnly = atBob.size() == 5 && atAlice.isEmpty() && !xpAtBob.isEmpty() && xpAtAlice.isEmpty();
+                helper.assertTrue(droppedAtAliceOnly || droppedAtBobOnly,
+                    "Round " + round + ": all 5 items and XP must drop together at either Alice or Bob (atAlice="
+                        + atAlice.size() + ", atBob=" + atBob.size() + ", xpAlice=" + xpAtAlice.size() + ", xpBob=" + xpAtBob.size() + ")");
+
+                if (droppedAtAliceOnly) {
+                    aliceWins++;
+                } else {
+                    bobWins++;
+                    if (!verifiedSurvivingObserverSeesRealLoot) {
+                        long charlieVisibleItems = charliePackets.stream()
+                            .filter(p -> p instanceof ClientboundAddEntityPacket add && add.getType() == EntityTypes.ITEM)
+                            .count();
+                        helper.assertTrue(charlieVisibleItems == 5,
+                            "Surviving observer near Bob must see all 5 real dropped items (got " + charlieVisibleItems + ")");
+                        verifiedSurvivingObserverSeesRealLoot = true;
+                    }
+                    if (!verifiedBobScatter) {
+                        java.util.Set<Vec3> velocities = new java.util.HashSet<>();
+                        for (ItemEntity item : atBob) {
+                            Vec3 v = item.getDeltaMovement();
+                            helper.assertTrue(Math.abs(v.y - 0.2D) < 0.01D,
+                                "Redirected death item must keep vanilla upward scatter velocity 0.2 (got " + v.y + ")");
+                            helper.assertTrue(item.hasPickUpDelay(),
+                                "Redirected death item must keep vanilla pickup delay");
+                            velocities.add(v);
+                        }
+                        helper.assertTrue(velocities.size() >= 3,
+                            "Redirected death items must scatter in distinct random directions around Bob (distinct=" + velocities.size() + ")");
+                        verifiedBobScatter = true;
+                    }
+                }
+            }
+
+            helper.assertTrue(aliceWins > 0 && bobWins > 0,
+                "Over 24 rounds, both original victim Alice and teammate Bob must be drawn (aliceWins="
+                    + aliceWins + ", bobWins=" + bobWins + ")");
+            helper.assertTrue(verifiedBobScatter && verifiedPreExistingHiddenAndRespawnRestored && verifiedSurvivingObserverSeesRealLoot,
+                "Scatter physics, death-screen item hiding, respawn restore, and living observer visibility must all be verified");
+
+            // 4. Cross-dimension check: Alice in Overworld, Bob in Nether -> if Bob is drawn, items spawn in Nether at Bob
+            boolean verifiedNetherDrop = false;
+            for (int round = 0; round < 20 && !verifiedNetherDrop; round++) {
+                if (alice.isDeadOrDying()) {
+                    alice.connection.handleClientCommand(new ServerboundClientCommandPacket(ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
+                    alice = alice.connection.player;
+                    alice.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
+                }
+                if (bob.isDeadOrDying()) {
+                    bob.connection.handleClientCommand(new ServerboundClientCommandPacket(ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
+                    bob = bob.connection.player;
+                    bob.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
+                }
+
+                alice.teleportTo(overworld, alicePos.x, alicePos.y, alicePos.z, java.util.Set.of(), 0.0F, 0.0F, false);
+                bob.teleportTo(nether, netherBobPos.x, netherBobPos.y, netherBobPos.z, java.util.Set.of(), 0.0F, 0.0F, false);
+                clearDroppedEntities.run();
+
+                alice.getInventory().setItem(0, new ItemStack(Items.NETHERITE_INGOT, 2));
+                alice.setExperienceLevels(10);
+                alice.hurtServer(overworld, overworld.damageSources().generic(), 50.0F);
+
+                List<ItemEntity> inOverworld = overworld.getEntitiesOfClass(ItemEntity.class, aliceBox);
+                List<ItemEntity> inNether = nether.getEntitiesOfClass(ItemEntity.class, netherBobBox);
+                List<ExperienceOrb> xpInNether = nether.getEntitiesOfClass(ExperienceOrb.class, netherBobBox);
+                if (inNether.size() == 1 && inOverworld.isEmpty() && !xpInNether.isEmpty()) {
+                    verifiedNetherDrop = true;
+                } else {
+                    helper.assertTrue(inOverworld.size() == 1 && inNether.isEmpty(),
+                        "Cross-dimension death must drop all loot in exactly one player's dimension (ow="
+                            + inOverworld.size() + ", nether=" + inNether.size()
+                            + ", aliceDim=" + alice.level().dimension().identifier()
+                            + ", alicePos=" + alice.position()
+                            + ", bobDim=" + bob.level().dimension().identifier()
+                            + ", bobPos=" + bob.position() + ")");
+                }
+            }
+            helper.assertTrue(verifiedNetherDrop, "Cross-dimension draw to Bob in Nether must drop loot in Nether at Bob");
+
+            helper.succeed();
+        } finally {
+            nether.setChunkForced(120 >> 4, 0, false);
+            OIMRConfig.setRandomDeathLoot(prevRandomLoot);
+            OIMRConfig.setExcludeCreativeFromDeath(prevExcludeCreative);
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob, creativeCharlie);
+        }
+    }
+
+    @GameTest
+    public void testDamageAndFoodKillfeedPayloadsAndOriginTracking(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        ServerPlayer alice = spawnTestPlayer(server, level, "FeedAlice");
+        ServerPlayer bob = spawnTestPlayer(server, level, "FeedBob");
+        record ObservedFeed(UUID recipientId, Object payload) {}
+        java.util.List<ObservedFeed> observed = new java.util.ArrayList<>();
+        BlockPos cakePos = new BlockPos(0, 65, 0);
+        try {
+            OIMRNetworking.setTestFeedObserver((recipient, payload) -> observed.add(new ObservedFeed(recipient.getUUID(), payload)));
+
+            // 1. Payload codec round-trips
+            OIMRDamageFeedPayload dmgSample = new OIMRDamageFeedPayload("FeedAlice", DamageIconType.EXPLOSION, 7.5F);
+            FriendlyByteBuf dmgBuf = new FriendlyByteBuf(Unpooled.buffer());
+            OIMRDamageFeedPayload.STREAM_CODEC.encode(dmgBuf, dmgSample);
+            OIMRDamageFeedPayload dmgDecoded = OIMRDamageFeedPayload.STREAM_CODEC.decode(dmgBuf);
+            helper.assertTrue("FeedAlice".equals(dmgDecoded.playerName())
+                    && dmgDecoded.iconType() == DamageIconType.EXPLOSION
+                    && Math.abs(dmgDecoded.amount() - 7.5F) < 0.001F,
+                "Damage feed payload must round-trip cleanly");
+
+            OIMRFoodFeedPayload foodSample = new OIMRFoodFeedPayload("FeedBob", new ItemStack(Items.COOKED_BEEF), 6);
+            RegistryFriendlyByteBuf foodBuf = new RegistryFriendlyByteBuf(Unpooled.buffer(), server.registryAccess());
+            OIMRFoodFeedPayload.STREAM_CODEC.encode(foodBuf, foodSample);
+            OIMRFoodFeedPayload foodDecoded = OIMRFoodFeedPayload.STREAM_CODEC.decode(foodBuf);
+            helper.assertTrue("FeedBob".equals(foodDecoded.playerName())
+                    && foodDecoded.foodItem().is(Items.COOKED_BEEF)
+                    && foodDecoded.recoveredFoodPoints() == 6,
+                "Food feed payload must round-trip cleanly");
+
+            // 2. Full affinity (100%): original fall damage on Alice notifies both Alice & Bob once with FALL + 4.0F
+            OIMRConfig.setAffinityPercent(100);
+            HiveMindManager.onConfigChanged(server);
+            alice.setHealth(20.0F);
+            observed.clear();
+            alice.hurtServer(level, level.damageSources().fall(), 4.0F);
+
+            long aliceDmgCount = observed.stream()
+                .filter(e -> e.payload() instanceof OIMRDamageFeedPayload p
+                    && e.recipientId().equals(alice.getUUID())
+                    && "FeedAlice".equals(p.playerName())
+                    && p.iconType() == DamageIconType.FALL
+                    && Math.abs(p.amount() - 4.0F) < 0.01F)
+                .count();
+            long bobDmgCount = observed.stream()
+                .filter(e -> e.payload() instanceof OIMRDamageFeedPayload p
+                    && e.recipientId().equals(bob.getUUID())
+                    && "FeedAlice".equals(p.playerName())
+                    && p.iconType() == DamageIconType.FALL
+                    && Math.abs(p.amount() - 4.0F) < 0.01F)
+                .count();
+            helper.assertTrue(aliceDmgCount == 1 && bobDmgCount == 1 && observed.size() == 2,
+                "100% affinity original hit must emit exactly 1 damage feed event per online group member (size=" + observed.size() + ")");
+
+            // 3. Partial affinity (50%): arrow hit on Alice emits ONE original PROJECTILE feed event, not Bob's shared damage
+            OIMRConfig.setAffinityPercent(50);
+            HiveMindManager.onConfigChanged(server);
+            alice.setHealth(20.0F);
+            bob.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            bob.damageCooldownTime = 0;
+            observed.clear();
+            Arrow arrow = EntityTypes.ARROW.create(level, EntitySpawnReason.COMMAND);
+            helper.assertTrue(arrow != null, "Arrow must spawn");
+            alice.hurtServer(level, level.damageSources().arrow(arrow, null), 6.0F);
+            helper.assertTrue(bob.getHealth() == 17.0F, "Bob must take 3.0 shared damage at 50% affinity");
+            long projectileEvents = observed.stream()
+                .filter(e -> e.payload() instanceof OIMRDamageFeedPayload p
+                    && "FeedAlice".equals(p.playerName())
+                    && p.iconType() == DamageIconType.PROJECTILE
+                    && Math.abs(p.amount() - 6.0F) < 0.01F)
+                .count();
+            helper.assertTrue(projectileEvents == 2 && observed.size() == 2,
+                "Partial affinity must only emit feed for original hit on Alice (observed=" + observed.size() + ")");
+
+            // 4. Food consumption via Consumable (partial hunger recovery + full hunger 0 recovery)
+            OIMRConfig.setAffinityPercent(100);
+            HiveMindManager.onConfigChanged(server);
+            alice.getFoodData().setFoodLevel(14);
+            alice.getFoodData().setSaturation(0.0F);
+            observed.clear();
+
+            ItemStack beef = new ItemStack(Items.COOKED_BEEF, 2);
+            var consumable = beef.get(DataComponents.CONSUMABLE);
+            helper.assertTrue(consumable != null, "Cooked beef must have Consumable component");
+            consumable.onConsume(level, alice, beef);
+
+            long foodEvents = observed.stream()
+                .filter(e -> e.payload() instanceof OIMRFoodFeedPayload p
+                    && "FeedAlice".equals(p.playerName())
+                    && p.foodItem().is(Items.COOKED_BEEF)
+                    && p.recoveredFoodPoints() == 6)
+                .count();
+            helper.assertTrue(foodEvents == 2 && observed.size() == 2,
+                "Eating cooked beef from 14->20 must emit recoveredFoodPoints=6 (3 carninhas) for both members");
+
+            // Eating golden apple at full hunger (20/20) emits 0 recovered food points with golden apple icon
+            observed.clear();
+            ItemStack gapple = new ItemStack(Items.GOLDEN_APPLE, 1);
+            var gappleConsumable = gapple.get(DataComponents.CONSUMABLE);
+            helper.assertTrue(gappleConsumable != null, "Golden apple must have Consumable component");
+            gappleConsumable.onConsume(level, alice, gapple);
+            long gappleEvents = observed.stream()
+                .filter(e -> e.payload() instanceof OIMRFoodFeedPayload p
+                    && "FeedAlice".equals(p.playerName())
+                    && p.foodItem().is(Items.GOLDEN_APPLE)
+                    && p.recoveredFoodPoints() == 0)
+                .count();
+            helper.assertTrue(gappleEvents == 2 && observed.size() == 2,
+                "Eating golden apple at full hunger must emit recoveredFoodPoints=0 with GOLDEN_APPLE item");
+
+            // 5. Cake slice consumption emits Items.CAKE with recoveredFoodPoints=2 (1 carninha)
+            alice.getFoodData().setFoodLevel(16);
+            level.setBlock(cakePos, Blocks.CAKE.defaultBlockState(), 3);
+            observed.clear();
+            var hit = new BlockHitResult(Vec3.atCenterOf(cakePos), Direction.UP, cakePos, false);
+            level.getBlockState(cakePos).useWithoutItem(level, alice, hit);
+            long cakeEvents = observed.stream()
+                .filter(e -> e.payload() instanceof OIMRFoodFeedPayload p
+                    && "FeedAlice".equals(p.playerName())
+                    && p.foodItem().is(Items.CAKE)
+                    && p.recoveredFoodPoints() == 2)
+                .count();
+            helper.assertTrue(cakeEvents == 2 && observed.size() == 2,
+                "Eating a cake slice must emit Items.CAKE and recoveredFoodPoints=2 (1 carninha)");
+
+            // 6. Air bubble drain feed: codec round-trip + submerged Alice emits -1 bubble for both members when 1st bubble pops
+            OIMRAirFeedPayload airSample = new OIMRAirFeedPayload("FeedAlice", 1);
+            FriendlyByteBuf airBuf = new FriendlyByteBuf(Unpooled.buffer());
+            OIMRAirFeedPayload.STREAM_CODEC.encode(airBuf, airSample);
+            OIMRAirFeedPayload airDecoded = OIMRAirFeedPayload.STREAM_CODEC.decode(airBuf);
+            helper.assertTrue("FeedAlice".equals(airDecoded.playerName()) && airDecoded.drainedBubbles() == 1,
+                "Air feed payload must round-trip cleanly");
+
+            BlockPos airFeet = new BlockPos(3, 65, 3);
+            BlockPos airEye = airFeet.above();
+            level.setBlock(airFeet, Blocks.WATER.defaultBlockState(), 3);
+            level.setBlock(airEye, Blocks.WATER.defaultBlockState(), 3);
+            try {
+                alice.teleportTo(airFeet.getX() + 0.5, airFeet.getY(), airFeet.getZ() + 0.5);
+                bob.teleportTo(10.5, 65.0, 10.5);
+                alice.baseTick();
+                HiveMind hive = HiveMindManager.getHiveForPlayer(alice);
+                helper.assertTrue(hive != null, "Alice must belong to a hive");
+                hive.setAirSupply(300);
+                observed.clear();
+
+                // 27 ticks (300 -> 273) do not pop a bubble yet
+                for (int t = 0; t < 27; t++) {
+                    alice.baseTick();
+                    bob.baseTick();
+                    HiveMindManager.onEndServerTick(server);
+                    server.getPlayerList().getPlayers().forEach(p -> p.tickCount++);
+                    // Advance overworld game time via tick is not needed if we reset tick claim or step world;
+                    // use tryClaimEnvironmentTick indirectly by resetting tick claims each simulated tick:
+                    hive.resetTickClaims();
+                }
+                helper.assertTrue(hive.getAirSupply() == 273 && observed.isEmpty(),
+                    "Before reaching 272 air, no bubble should have popped yet (air=" + hive.getAirSupply() + ", observed=" + observed.size() + ")");
+
+                // 28th tick (273 -> 272) pops the first bubble!
+                HiveMindManager.onEndServerTick(server);
+                long airEvents = observed.stream()
+                    .filter(e -> e.payload() instanceof OIMRAirFeedPayload p
+                        && "FeedAlice".equals(p.playerName())
+                        && p.drainedBubbles() == 1)
+                    .count();
+                helper.assertTrue(hive.getAirSupply() == 272 && airEvents == 2 && observed.size() == 2,
+                    "Popping the first shared air bubble (273->272) must emit OIMRAirFeedPayload(-1, FeedAlice) to both members (air="
+                        + hive.getAirSupply() + ", airEvents=" + airEvents + ")");
+            } finally {
+                level.setBlock(airFeet, Blocks.AIR.defaultBlockState(), 3);
+                level.setBlock(airEye, Blocks.AIR.defaultBlockState(), 3);
+            }
+
+            helper.succeed();
+        } finally {
+            OIMRNetworking.setTestFeedObserver(null);
+            level.setBlock(cakePos, Blocks.AIR.defaultBlockState(), 3);
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testSyncEffectsToggleAndImmediateLiveConfigUpdates(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        int prevAffinity = OIMRConfig.getAffinityPercent();
+        boolean prevSyncEffects = OIMRConfig.isSyncEffectsEnabled();
+        boolean prevSyncHotbar = OIMRConfig.isSyncHotbarEnabled();
+        boolean prevSyncHelmet = OIMRConfig.isSyncHelmetEnabled();
+        float prevHungerWeight = OIMRConfig.getHungerWeight();
+        float prevXpWeight = OIMRConfig.getXpWeight();
+
+        TestPlayerHandle aliceHandle = spawnTestPlayerWithChannel(server, level, "LiveAlice");
+        TestPlayerHandle bobHandle = spawnTestPlayerWithChannel(server, level, "LiveBob");
+        ServerPlayer alice = aliceHandle.player();
+        ServerPlayer bob = bobHandle.player();
+        try {
+            OIMRConfig.setAffinityPercent(100);
+            OIMRConfig.setSyncEffects(false);
+            HiveMindManager.onConfigChanged(server);
+
+            // 1. Bond sync payload reflects effectsPercent = 0 immediately when syncEffects is disabled
+            OIMRBondSyncPayload bondDisabled = OIMRBondSyncPayload.fromConfig();
+            helper.assertTrue(bondDisabled.hungerPercent() == 100
+                    && bondDisabled.effectsPercent() == 0
+                    && bondDisabled.damagePercent() == 100,
+                "Disabling syncEffects must immediately report effectsPercent=0 in OIMRBondSyncPayload");
+
+            // 2. Duration-based effects are NOT synced between Alice and Bob while syncEffects=false
+            alice.addEffect(new MobEffectInstance(MobEffects.SPEED, 200, 1));
+            helper.assertTrue(alice.hasEffect(MobEffects.SPEED), "Alice must receive her own Speed effect");
+            helper.assertFalse(bob.hasEffect(MobEffects.SPEED), "Bob must NOT receive Speed when syncEffects=false");
+
+            // Splash potion with duration effect must also stay per-player when syncEffects=false
+            ItemStack splashRegen = PotionContents.createItemStack(Items.SPLASH_POTION, net.minecraft.world.item.alchemy.Potions.REGENERATION);
+            ThrownSplashPotion potion = new ThrownSplashPotion(level, alice, splashRegen);
+            potion.setPos(alice.getX(), alice.getY() + 0.5, alice.getZ());
+            bob.teleportTo(alice.getX() + 10.0, alice.getY(), alice.getZ() + 10.0);
+            HiveMindManager.beginSplashPotionImpact();
+            boolean captured = HiveMindManager.captureSplashPotionEffect(alice, new MobEffectInstance(MobEffects.REGENERATION, 160, 0));
+            HiveMindManager.endSplashPotionImpact(potion, alice);
+            potion.discard();
+            helper.assertFalse(captured, "captureSplashPotionEffect must return false when syncEffects=false");
+
+            // Removal on Alice does not clear Bob's personal effect
+            bob.addEffect(new MobEffectInstance(MobEffects.NIGHT_VISION, 200, 0));
+            alice.addEffect(new MobEffectInstance(MobEffects.NIGHT_VISION, 200, 0));
+            alice.removeEffect(MobEffects.NIGHT_VISION);
+            helper.assertTrue(bob.hasEffect(MobEffects.NIGHT_VISION),
+                "Removing Night Vision from Alice must not clear Bob's Night Vision when syncEffects=false");
+            bob.removeEffect(MobEffects.NIGHT_VISION);
+
+            // Periodic Poison ticks independently for Alice and Bob when syncEffects=false
+            MobEffectInstance alicePoison = new MobEffectInstance(MobEffects.POISON, 100, 0);
+            MobEffectInstance bobPoison = new MobEffectInstance(MobEffects.POISON, 100, 0);
+            alice.addEffect(alicePoison);
+            bob.addEffect(bobPoison);
+            helper.assertTrue(HiveMindManager.shouldApplyPeriodicEffectTick(alice, MobEffects.POISON)
+                    && HiveMindManager.shouldApplyPeriodicEffectTick(bob, MobEffects.POISON),
+                "Both players must tick personal Poison independently when syncEffects=false");
+            alice.removeEffect(MobEffects.POISON);
+            bob.removeEffect(MobEffects.POISON);
+
+            // 3. Re-enabling syncEffects=true + onConfigChanged immediately syncs alive.getFirst()'s effects
+            //    without getting overwritten by Bob's empty effect list!
+            OIMRConfig.setSyncEffects(true);
+            HiveMindManager.onConfigChanged(server);
+            helper.assertTrue(alice.hasEffect(MobEffects.SPEED) && bob.hasEffect(MobEffects.SPEED),
+                "Re-enabling syncEffects must immediately propagate Alice's active Speed to Bob without wiping Alice");
+
+            // 4. Raising affinity 50 -> 100 via onConfigChanged preserves rep health & resyncs teammates immediately
+            OIMRConfig.setAffinityPercent(50);
+            HiveMindManager.onConfigChanged(server);
+            alice.setHealth(12.0F);
+            bob.setHealth(20.0F);
+            OIMRConfig.setAffinityPercent(100);
+            HiveMindManager.onConfigChanged(server);
+            helper.assertTrue(Math.abs(alice.getHealth() - 12.0F) < 0.01F && Math.abs(bob.getHealth() - 12.0F) < 0.01F,
+                "Raising affinity to 100 via onConfigChanged must immediately sync all members to rep health (alice="
+                    + alice.getHealth() + ", bob=" + bob.getHealth() + ")");
+
+            // 5. Live slot/weight/config toggles immediately drop shared items, re-route, and avoid duplication
+            BlockPos dropCheckPos = helper.absolutePos(new BlockPos(2, 2, 2));
+            alice.teleportTo(dropCheckPos.getX() + 0.5, dropCheckPos.getY(), dropCheckPos.getZ() + 0.5);
+            bob.teleportTo(dropCheckPos.getX() + 4.5, dropCheckPos.getY(), dropCheckPos.getZ() + 0.5);
+            alice.getInventory().setItem(1, new ItemStack(Items.DIAMOND, 4));
+            alice.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.IRON_HELMET));
+            OIMRConfig.setHungerWeight(2.5F);
+            OIMRConfig.setXpWeight(0.5F);
+            HiveMindManager.applyBooleanSetting(server, alice, OIMRConfig.KEY_SYNC_HOTBAR, false);
+            HiveMindManager.applyBooleanSetting(server, alice, OIMRConfig.KEY_SYNC_HELMET, false);
+
+            helper.assertTrue(bob.getInventory().getItem(1).isEmpty() && alice.getInventory().getItem(1).isEmpty(),
+                "Disabling syncHotbar must clear shared hotbar slot 1 and switch to empty personal slots");
+            helper.assertTrue(bob.getItemBySlot(EquipmentSlot.HEAD).isEmpty() && alice.getItemBySlot(EquipmentSlot.HEAD).isEmpty(),
+                "Disabling syncHelmet must clear shared helmet slot and switch to empty personal equipment");
+
+            AABB dropArea = new AABB(dropCheckPos).inflate(8.0D);
+            List<ItemEntity> droppedItems = level.getEntitiesOfClass(ItemEntity.class, dropArea);
+            int droppedDiamonds = droppedItems.stream()
+                .filter(e -> e.getItem().is(Items.DIAMOND))
+                .mapToInt(e -> e.getItem().getCount())
+                .sum();
+            int droppedHelmets = droppedItems.stream()
+                .filter(e -> e.getItem().is(Items.IRON_HELMET))
+                .mapToInt(e -> e.getItem().getCount())
+                .sum();
+            helper.assertTrue(droppedDiamonds == 4 && droppedHelmets == 1,
+                "Disabling syncHotbar and syncHelmet must canonically drop the 4 diamonds and 1 iron helmet (diamonds="
+                    + droppedDiamonds + ", helmets=" + droppedHelmets + ")");
+
+            HiveMindManager.applyBooleanSetting(server, alice, OIMRConfig.KEY_SYNC_HOTBAR, true);
+            HiveMindManager.applyBooleanSetting(server, alice, OIMRConfig.KEY_SYNC_HELMET, true);
+            helper.assertTrue(bob.getInventory().getItem(1).isEmpty()
+                    && bob.getItemBySlot(EquipmentSlot.HEAD).isEmpty(),
+                "Re-enabling syncHotbar & syncHelmet must NOT duplicate previously shared items");
+            droppedItems.forEach(Entity::discard);
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setAffinityPercent(prevAffinity);
+            OIMRConfig.setSyncEffects(prevSyncEffects);
+            OIMRConfig.setSyncHotbar(prevSyncHotbar);
+            OIMRConfig.setSyncHelmet(prevSyncHelmet);
+            OIMRConfig.setHungerWeight(prevHungerWeight);
+            OIMRConfig.setXpWeight(prevXpWeight);
+            HiveMindManager.onConfigChanged(server);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testRuntimeSlotSyncDisableDropsSharedItemsWithoutDuplication(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        boolean prevHotbar = OIMRConfig.isSyncHotbarEnabled();
+        boolean prevMain = OIMRConfig.isSyncMainHandEnabled();
+        boolean prevOff = OIMRConfig.isSyncOffHandEnabled();
+        boolean prevHead = OIMRConfig.isSyncHelmetEnabled();
+        boolean prevChest = OIMRConfig.isSyncChestplateEnabled();
+        boolean prevLegs = OIMRConfig.isSyncLeggingsEnabled();
+        boolean prevBoots = OIMRConfig.isSyncBootsEnabled();
+
+        ServerPlayer alice = spawnTestPlayer(server, level, "SlotSyncAlice");
+        ServerPlayer bob = spawnTestPlayer(server, level, "SlotSyncBob");
+        BlockPos alicePos = helper.absolutePos(new BlockPos(2, 2, 2));
+        BlockPos bobPos = helper.absolutePos(new BlockPos(18, 2, 2));
+        BlockPos offlinePos = helper.absolutePos(new BlockPos(34, 2, 2));
+        PlayerTeam offlineTeam = null;
+        ServerPlayer charlie = null;
+        try {
+            HiveMindManager.resetConfigToDefaults(server, alice);
+            alice.teleportTo(alicePos.getX() + 0.5, alicePos.getY(), alicePos.getZ() + 0.5);
+            bob.teleportTo(bobPos.getX() + 0.5, bobPos.getY(), bobPos.getZ() + 0.5);
+
+            // Populate every sync-toggleable slot
+            alice.getInventory().setItem(0, new ItemStack(Items.NETHERITE_SWORD));
+            alice.getInventory().setItem(1, new ItemStack(Items.DIAMOND, 4));
+            alice.setItemSlot(EquipmentSlot.OFFHAND, new ItemStack(Items.SHIELD));
+            alice.setItemSlot(EquipmentSlot.HEAD, new ItemStack(Items.DIAMOND_HELMET));
+            alice.setItemSlot(EquipmentSlot.CHEST, new ItemStack(Items.DIAMOND_CHESTPLATE));
+            alice.setItemSlot(EquipmentSlot.LEGS, new ItemStack(Items.DIAMOND_LEGGINGS));
+            alice.setItemSlot(EquipmentSlot.FEET, new ItemStack(Items.DIAMOND_BOOTS));
+
+            // 1. Bob disables syncHotbar (while syncMainHand=true) -> slot 1 drops at Bob, slot 0 stays synced
+            HiveMindManager.applyBooleanSetting(server, bob, OIMRConfig.KEY_SYNC_HOTBAR, false);
+            List<ItemEntity> bobDrops1 = level.getEntitiesOfClass(ItemEntity.class, new AABB(bobPos).inflate(4.0D));
+            int bobDiamonds = bobDrops1.stream().filter(e -> e.getItem().is(Items.DIAMOND)).mapToInt(e -> e.getItem().getCount()).sum();
+            helper.assertTrue(bobDiamonds == 4,
+                "Disabling syncHotbar by Bob must drop slot 1's 4 diamonds at Bob (got " + bobDiamonds + ")");
+            helper.assertTrue(alice.getInventory().getItem(0).is(Items.NETHERITE_SWORD)
+                    && bob.getInventory().getItem(0).is(Items.NETHERITE_SWORD),
+                "Hotbar slot 0 must stay synced while syncMainHand=true");
+            bobDrops1.forEach(Entity::discard);
+
+            // Personal slot 1 remains isolated when syncHotbar toggles ON and back OFF
+            alice.getInventory().setItem(1, new ItemStack(Items.EMERALD, 1));
+            HiveMindManager.applyBooleanSetting(server, alice, OIMRConfig.KEY_SYNC_HOTBAR, true);
+            helper.assertTrue(alice.getInventory().getItem(1).isEmpty() && bob.getInventory().getItem(1).isEmpty(),
+                "Re-enabling syncHotbar must NOT bring back previously dropped diamonds or leak Alice's personal emerald");
+            HiveMindManager.applyBooleanSetting(server, alice, OIMRConfig.KEY_SYNC_HOTBAR, false);
+            helper.assertTrue(alice.getInventory().getItem(1).is(Items.EMERALD)
+                    && alice.getInventory().getItem(1).getCount() == 1
+                    && bob.getInventory().getItem(1).isEmpty(),
+                "Disabling syncHotbar again must restore Alice's personal emerald without duplication");
+
+            // 2. Disabling syncMainHand while Alice draws a bow stops use & drops sword canonically
+            alice.getInventory().setItem(9, new ItemStack(Items.ARROW, 1));
+            alice.getInventory().setItem(0, new ItemStack(Items.BOW));
+            alice.getInventory().setSelectedSlot(0);
+            alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(alice.isUsingItem(), "Alice must be actively drawing the bow before syncMainHand is disabled");
+
+            HiveMindManager.applyBooleanSetting(server, alice, OIMRConfig.KEY_SYNC_MAIN_HAND, false);
+            helper.assertFalse(alice.isUsingItem(),
+                "Disabling syncMainHand must cancel active item use on main hand before dropping slot 0");
+            List<ItemEntity> aliceDrops = level.getEntitiesOfClass(ItemEntity.class, new AABB(alicePos).inflate(4.0D));
+            long droppedBows = aliceDrops.stream().filter(e -> e.getItem().is(Items.BOW)).count();
+            helper.assertTrue(droppedBows == 1 && alice.getInventory().getItem(0).isEmpty() && bob.getInventory().getItem(0).isEmpty(),
+                "Disabling syncMainHand must drop the shared bow once and clear slot 0");
+            helper.assertTrue(alice.getInventory().getItem(9).is(Items.ARROW) && alice.getInventory().getItem(9).getCount() == 1,
+                "Stopping bow draw on syncMainHand disable must refund the reserved arrow to shared inventory");
+            aliceDrops.forEach(Entity::discard);
+
+            // 3. Console/RCON (initiator == null) drops equipment slots to deterministic priority member
+            ServerPlayer priorityMember = alice.getUUID().compareTo(bob.getUUID()) < 0 ? alice : bob;
+            BlockPos priorityPos = priorityMember == alice ? alicePos : bobPos;
+            for (String key : List.of(
+                OIMRConfig.KEY_SYNC_OFF_HAND,
+                OIMRConfig.KEY_SYNC_HELMET,
+                OIMRConfig.KEY_SYNC_CHESTPLATE,
+                OIMRConfig.KEY_SYNC_LEGGINGS,
+                OIMRConfig.KEY_SYNC_BOOTS
+            )) {
+                HiveMindManager.applyBooleanSetting(server, null, key, false);
+            }
+            List<ItemEntity> priorityDrops = level.getEntitiesOfClass(ItemEntity.class, new AABB(priorityPos).inflate(4.0D));
+            helper.assertTrue(priorityDrops.size() == 5,
+                "Console/RCON disabling all 5 equipment slots must drop all 5 shared items at the priority member (got "
+                    + priorityDrops.size() + ")");
+            priorityDrops.forEach(Entity::discard);
+
+            // Re-enabling all slot syncs must NOT resurrect any dropped item
+            HiveMindManager.resetConfigToDefaults(server, alice);
+            helper.assertTrue(alice.getInventory().getItem(0).isEmpty()
+                    && alice.getOffhandItem().isEmpty()
+                    && alice.getItemBySlot(EquipmentSlot.HEAD).isEmpty()
+                    && alice.getItemBySlot(EquipmentSlot.CHEST).isEmpty()
+                    && alice.getItemBySlot(EquipmentSlot.LEGS).isEmpty()
+                    && alice.getItemBySlot(EquipmentSlot.FEET).isEmpty(),
+                "Re-enabling all slot syncs must never duplicate previously dropped shared items");
+
+            // 4. Offline hive queues pending sync drop and drops canonically when next member attaches
+            ServerScoreboard scoreboard = server.getScoreboard();
+            offlineTeam = scoreboard.addPlayerTeam("offline_drop_team");
+            charlie = spawnTestPlayer(server, level, "SlotSyncCharlie");
+            charlie.teleportTo(offlinePos.getX() + 0.5, offlinePos.getY(), offlinePos.getZ() + 0.5);
+            scoreboard.addPlayerToTeam(charlie.getScoreboardName(), offlineTeam);
+            HiveMindManager.syncAllPlayerTeams(server);
+            charlie.setItemSlot(EquipmentSlot.CHEST, new ItemStack(Items.IRON_CHESTPLATE));
+            server.getPlayerList().remove(charlie);
+            charlie = null;
+
+            HiveMindManager.applyBooleanSetting(server, null, OIMRConfig.KEY_SYNC_CHESTPLATE, false);
+            HiveMind offlineHive = HiveMindData.get(server).getIfPresent(HiveMindData.TEAM_HIVE_PREFIX + "offline_drop_team");
+            helper.assertTrue(offlineHive != null && offlineHive.getEquipmentMap().getOrDefault(EquipmentSlot.CHEST, ItemStack.EMPTY).isEmpty(),
+                "Offline hive must clear chestplate from shared equipment immediately when syncChestplate is disabled");
+
+            charlie = spawnTestPlayer(server, level, "SlotSyncCharlie2");
+            charlie.teleportTo(offlinePos.getX() + 0.5, offlinePos.getY(), offlinePos.getZ() + 0.5);
+            scoreboard.addPlayerToTeam(charlie.getScoreboardName(), offlineTeam);
+            HiveMindManager.syncAllPlayerTeams(server);
+
+            List<ItemEntity> offlineDrops = level.getEntitiesOfClass(ItemEntity.class, new AABB(offlinePos).inflate(4.0D));
+            long droppedIronChestplates = offlineDrops.stream().filter(e -> e.getItem().is(Items.IRON_CHESTPLATE)).count();
+            helper.assertTrue(droppedIronChestplates == 1,
+                "Queued pending sync drop must drop canonically when a member joins the offline hive");
+            offlineDrops.forEach(Entity::discard);
+
+            helper.succeed();
+        } finally {
+            if (charlie != null) {
+                cleanupPlayers(server, charlie);
+            }
+            if (offlineTeam != null) {
+                server.getScoreboard().removePlayerTeam(offlineTeam);
+            }
+            OIMRConfig.setSyncHotbar(prevHotbar);
+            OIMRConfig.setSyncMainHand(prevMain);
+            OIMRConfig.setSyncOffHand(prevOff);
+            OIMRConfig.setSyncHelmet(prevHead);
+            OIMRConfig.setSyncChestplate(prevChest);
+            OIMRConfig.setSyncLeggings(prevLegs);
+            OIMRConfig.setSyncBoots(prevBoots);
+            HiveMindManager.onConfigChanged(server);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testAuthoritativeAmmoReservationForBowAndCrossbow(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        TestPlayerHandle aliceHandle = spawnTestPlayerWithChannel(server, level, "AmmoAlice");
+        TestPlayerHandle bobHandle = spawnTestPlayerWithChannel(server, level, "AmmoBob");
+        ServerPlayer alice = aliceHandle.player();
+        ServerPlayer bob = bobHandle.player();
+        BlockPos pos = helper.absolutePos(new BlockPos(4, 2, 4));
+        try {
+            HiveMindManager.resetConfigToDefaults(server, alice);
+            level.setBlockAndUpdate(pos.below(), Blocks.STONE.defaultBlockState());
+            alice.teleportTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
+            bob.teleportTo(pos.getX() + 6.5, pos.getY(), pos.getZ() + 0.5);
+            alice.getInventory().setSelectedSlot(0);
+            bob.getInventory().setSelectedSlot(0);
+
+            // 1. Group has 1 Bow (shared in slot 0) / or 2 Bows (slot 0 & 1) and 1 Arrow (slot 9)
+            alice.getInventory().setItem(0, new ItemStack(Items.BOW));
+            alice.getInventory().setItem(1, new ItemStack(Items.BOW));
+            bob.getInventory().setSelectedSlot(1);
+            alice.getInventory().setItem(9, new ItemStack(Items.ARROW, 1));
+            alice.containerMenu.broadcastChanges();
+            bob.containerMenu.broadcastChanges();
+
+            // Alice starts drawing Bow -> arrow immediately reserved on server, Bob cannot see or draw it
+            aliceHandle.channel().outboundMessages().clear();
+            InteractionResult aliceDraw = alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(aliceDraw.consumesAction() && alice.isUsingItem(),
+                "Alice must start drawing bow when 1 arrow is available");
+            helper.assertTrue(bob.getInventory().getItem(9).isEmpty() && bob.getProjectile(bob.getMainHandItem()).isEmpty(),
+                "While Alice is drawing, the last arrow must immediately be unavailable to Bob on server");
+
+            // Alice's client still receives visual preservation of her reserved arrow while drawing
+            aliceHandle.channel().outboundMessages().clear();
+            alice.inventoryMenu.sendAllDataToRemote();
+            ClientboundContainerSetContentPacket aliceMidDrawContent = null;
+            Object rawPacket;
+            while ((rawPacket = aliceHandle.channel().outboundMessages().poll()) != null) {
+                if (rawPacket instanceof ClientboundContainerSetContentPacket content) {
+                    aliceMidDrawContent = content;
+                }
+            }
+            int slot9MenuIdx = alice.inventoryMenu.slots.stream()
+                .filter(s -> s.container == alice.getInventory() && s.getContainerSlot() == 9)
+                .findFirst()
+                .orElseThrow()
+                .index;
+            helper.assertTrue(aliceMidDrawContent != null && aliceMidDrawContent.items().get(slot9MenuIdx).is(Items.ARROW)
+                    && aliceMidDrawContent.items().get(slot9MenuIdx).getCount() == 1,
+                "Drawing player's client must keep seeing the reserved arrow during the draw");
+
+            InteractionResult bobDraw = bob.gameMode.useItem(bob, level, bob.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertFalse(bobDraw.consumesAction() || bob.isUsingItem(),
+                "Bob must fail to start drawing while Alice has reserved the last arrow");
+
+            // Alice charges and fires -> exactly 1 arrow entity spawned, 0 left in inventory
+            for (int i = 0; i < 12; i++) {
+                alice.doTick();
+            }
+            alice.releaseUsingItem();
+            List<AbstractArrow> firedArrows = level.getEntitiesOfClass(AbstractArrow.class, new AABB(pos).inflate(32.0D));
+            helper.assertTrue(firedArrows.size() == 1,
+                "Firing reserved bow must spawn exactly 1 arrow (got " + firedArrows.size() + ")");
+            helper.assertTrue(alice.getInventory().getItem(9).isEmpty() && bob.getInventory().getItem(9).isEmpty(),
+                "Shared inventory must have 0 arrows after firing");
+            firedArrows.forEach(Entity::discard);
+
+            // 2. Cancel with full inventory -> canonical drop of the reserved Spectral Arrow
+            alice.getInventory().setItem(9, new ItemStack(Items.SPECTRAL_ARROW, 1));
+            alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(alice.isUsingItem() && bob.getInventory().getItem(9).isEmpty(),
+                "Spectral arrow must be reserved during Alice's draw");
+            for (int i = 2; i < 36; i++) {
+                alice.getInventory().setItem(i, new ItemStack(Items.COBBLESTONE, 1));
+            }
+            alice.stopUsingItem();
+            List<ItemEntity> fullInvDrops = level.getEntitiesOfClass(ItemEntity.class, alice.getBoundingBox().inflate(4.0D));
+            long droppedSpectral = fullInvDrops.stream().filter(e -> e.getItem().is(Items.SPECTRAL_ARROW)).count();
+            helper.assertTrue(droppedSpectral == 1,
+                "Cancelling bow draw with a full inventory must canonically drop the reserved arrow at the player (got "
+                    + droppedSpectral + ")");
+            fullInvDrops.forEach(Entity::discard);
+            for (int i = 2; i < 36; i++) {
+                alice.getInventory().setItem(i, ItemStack.EMPTY);
+            }
+
+            // 3. Cancel with space -> returns to shared inventory; Disconnect while drawing -> returns to shared inventory
+            alice.getInventory().setItem(9, new ItemStack(Items.ARROW, 1));
+            alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            alice.stopUsingItem();
+            helper.assertTrue(bob.getInventory().getItem(9).is(Items.ARROW) && bob.getInventory().getItem(9).getCount() == 1,
+                "Cancelling draw with inventory space must return the reserved arrow to shared inventory");
+
+            // 4. Crossbow + Firework Rocket in offhand
+            alice.getInventory().setItem(0, new ItemStack(Items.CROSSBOW));
+            alice.getInventory().setItem(1, new ItemStack(Items.CROSSBOW));
+            alice.getInventory().setItem(9, ItemStack.EMPTY);
+            alice.setItemSlot(EquipmentSlot.OFFHAND, new ItemStack(Items.FIREWORK_ROCKET, 1));
+
+            InteractionResult aliceCrossbowDraw = alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(aliceCrossbowDraw.consumesAction() && alice.isUsingItem(),
+                "Alice must start charging crossbow with 1 firework in offhand");
+            helper.assertTrue(bob.getOffhandItem().isEmpty(),
+                "Bob must see offhand firework immediately reserved while Alice charges crossbow");
+            InteractionResult bobCrossbowDraw = bob.gameMode.useItem(bob, level, bob.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertFalse(bobCrossbowDraw.consumesAction() || bob.isUsingItem(),
+                "Bob must fail to start charging second crossbow while last firework is reserved");
+
+            int chargeTicks = CrossbowItem.getChargeDuration(alice.getMainHandItem(), alice) + 2;
+            for (int i = 0; i < chargeTicks; i++) {
+                alice.doTick();
+            }
+            alice.releaseUsingItem();
+            ChargedProjectiles charged = alice.getMainHandItem().get(DataComponents.CHARGED_PROJECTILES);
+            helper.assertTrue(charged != null && charged.contains(Items.FIREWORK_ROCKET) && alice.getOffhandItem().isEmpty(),
+                "Completed crossbow charge must load the reserved firework without duplicating it in offhand");
+
+            helper.succeed();
+        } finally {
+            level.setBlockAndUpdate(pos.below(), Blocks.AIR.defaultBlockState());
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testIndividualCooldownsAndImmediateLastThrowableConsumption(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        ServerPlayer alice = spawnTestPlayer(server, level, "ThrowAlice");
+        ServerPlayer bob = spawnTestPlayer(server, level, "ThrowBob");
+        BlockPos pos = helper.absolutePos(new BlockPos(6, 2, 6));
+        try {
+            HiveMindManager.resetConfigToDefaults(server, alice);
+            alice.teleportTo(pos.getX() + 0.5, pos.getY() + 2.0, pos.getZ() + 0.5);
+            bob.teleportTo(pos.getX() + 6.5, pos.getY() + 2.0, pos.getZ() + 0.5);
+            alice.getInventory().setSelectedSlot(0);
+            bob.getInventory().setSelectedSlot(0);
+
+            // 1. Single Ender Pearl: Alice throws -> immediate consumption + individual cooldown; Bob fails in same tick
+            ItemStack singlePearl = new ItemStack(Items.ENDER_PEARL, 1);
+            alice.getInventory().setItem(0, singlePearl);
+            InteractionResult alicePearl = alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(alicePearl.consumesAction(), "Alice must succeed throwing the last ender pearl");
+            helper.assertTrue(alice.getInventory().getItem(0).isEmpty() && bob.getInventory().getItem(0).isEmpty(),
+                "Last ender pearl must immediately be empty in shared inventory");
+            helper.assertTrue(alice.getCooldowns().isOnCooldown(new ItemStack(Items.ENDER_PEARL)),
+                "Alice must receive her personal ender pearl cooldown");
+            helper.assertFalse(bob.getCooldowns().isOnCooldown(new ItemStack(Items.ENDER_PEARL)),
+                "Bob must NOT receive Alice's ender pearl cooldown");
+
+            // Bob attempts in the exact same tick using both current slot and stale stack reference
+            InteractionResult bobFresh = bob.gameMode.useItem(bob, level, bob.getMainHandItem(), InteractionHand.MAIN_HAND);
+            InteractionResult bobStale = bob.gameMode.useItem(bob, level, singlePearl, InteractionHand.MAIN_HAND);
+            helper.assertFalse(bobFresh.consumesAction() || bobStale.consumesAction(),
+                "Bob must not be able to throw the already-consumed last ender pearl in the same tick");
+            List<ThrownEnderpearl> pearls = level.getEntitiesOfClass(ThrownEnderpearl.class, new AABB(pos).inflate(16.0D));
+            helper.assertTrue(pearls.size() == 1,
+                "Only 1 ThrownEnderpearl may exist when 2 players race the last pearl (got " + pearls.size() + ")");
+            pearls.forEach(Entity::discard);
+
+            // 2. Single Snowball: Alice throws -> Bob fails in same tick
+            ItemStack singleSnowball = new ItemStack(Items.SNOWBALL, 1);
+            alice.getInventory().setItem(0, singleSnowball);
+            InteractionResult aliceSnow = alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            InteractionResult bobSnow = bob.gameMode.useItem(bob, level, singleSnowball, InteractionHand.MAIN_HAND);
+            helper.assertTrue(aliceSnow.consumesAction() && !bobSnow.consumesAction(),
+                "Only Alice may throw the last snowball when racing in the same tick");
+            List<Snowball> snowballs = level.getEntitiesOfClass(Snowball.class, new AABB(pos).inflate(16.0D));
+            helper.assertTrue(snowballs.size() == 1,
+                "Only 1 Snowball entity may spawn from 1 shared snowball (got " + snowballs.size() + ")");
+            snowballs.forEach(Entity::discard);
+
+            // 3. Two Ender Pearls: Alice throws 1, gets cooldown; Bob is NOT blocked and immediately throws the 2nd
+            alice.getInventory().setItem(0, new ItemStack(Items.ENDER_PEARL, 2));
+            // Wait out Alice's cooldown first so she can throw again, or verify fresh throw with Wind Charge / fresh cooldown
+            for (int i = 0; i < 25; i++) {
+                alice.doTick();
+                bob.doTick();
+            }
+            helper.assertFalse(alice.getCooldowns().isOnCooldown(new ItemStack(Items.ENDER_PEARL)),
+                "Alice's cooldown should expire after 25 ticks");
+
+            InteractionResult aliceFirstOfTwo = alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(aliceFirstOfTwo.consumesAction(), "Alice throws 1st of 2 ender pearls");
+            helper.assertTrue(alice.getCooldowns().isOnCooldown(new ItemStack(Items.ENDER_PEARL))
+                    && !bob.getCooldowns().isOnCooldown(new ItemStack(Items.ENDER_PEARL)),
+                "Bob's cooldown must remain independent when Alice throws 1st of 2 pearls");
+
+            InteractionResult bobSecondOfTwo = bob.gameMode.useItem(bob, level, bob.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(bobSecondOfTwo.consumesAction(),
+                "Bob must immediately be able to throw the 2nd ender pearl without being blocked by Alice's cooldown");
+            helper.assertTrue(bob.getCooldowns().isOnCooldown(new ItemStack(Items.ENDER_PEARL))
+                    && alice.getInventory().getItem(0).isEmpty(),
+                "After both throw, both have independent cooldowns and 0 pearls remain");
+
+            List<ThrownEnderpearl> twoPearls = level.getEntitiesOfClass(ThrownEnderpearl.class, new AABB(pos).inflate(16.0D));
+            helper.assertTrue(twoPearls.size() == 2,
+                "Two ender pearls shared between two players must spawn 2 projectiles (got " + twoPearls.size() + ")");
+            twoPearls.forEach(Entity::discard);
+
+            // 4. Wind Charge cooldown independence & last-item guard
+            alice.getInventory().setItem(0, new ItemStack(Items.WIND_CHARGE, 1));
+            InteractionResult aliceWind = alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            InteractionResult bobWind = bob.gameMode.useItem(bob, level, bob.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(aliceWind.consumesAction() && !bobWind.consumesAction(),
+                "Last wind charge must be consumed immediately and not usable by Bob");
+            helper.assertTrue(alice.getCooldowns().isOnCooldown(new ItemStack(Items.WIND_CHARGE))
+                    && !bob.getCooldowns().isOnCooldown(new ItemStack(Items.WIND_CHARGE)),
+                "Wind charge cooldown must remain individual per player");
+            level.getEntitiesOfClass(WindCharge.class, new AABB(pos).inflate(16.0D)).forEach(Entity::discard);
+
+            helper.succeed();
+        } finally {
             cleanupPlayers(server, alice, bob);
         }
     }

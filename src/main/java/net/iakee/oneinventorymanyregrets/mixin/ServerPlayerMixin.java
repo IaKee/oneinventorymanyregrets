@@ -3,6 +3,8 @@ package net.iakee.oneinventorymanyregrets.mixin;
 import com.llamalad7.mixinextras.injector.v2.WrapWithCondition;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
+import com.llamalad7.mixinextras.sugar.Share;
+import com.llamalad7.mixinextras.sugar.ref.LocalBooleanRef;
 import io.netty.channel.ChannelFutureListener;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindManager;
 import net.iakee.oneinventorymanyregrets.hivemind.OIMRLang;
@@ -26,6 +28,49 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(ServerPlayer.class)
 public class ServerPlayerMixin {
+    @Inject(method = "tickRegeneration", at = @At("HEAD"), cancellable = true)
+    private void oimr$guardPeacefulRegen(
+        CallbackInfo ci,
+        @Share("oimrRestoreSuppressCascade") LocalBooleanRef restoreSuppress
+    ) {
+        ServerPlayer self = (ServerPlayer) (Object) this;
+        if (!HiveMindManager.shouldRunPeacefulRegen(self)) {
+            restoreSuppress.set(false);
+            ci.cancel();
+            return;
+        }
+        restoreSuppress.set(HiveMindManager.beginPeacefulRegenTick(self));
+    }
+
+    @WrapWithCondition(
+        method = "tickRegeneration",
+        at = @At(
+            value = "INVOKE",
+            target = "Lnet/minecraft/world/food/FoodData;setSaturation(F)V"
+        )
+    )
+    private boolean oimr$guardPeacefulSaturationRegen(FoodData instance, float saturation) {
+        return HiveMindManager.shouldApplyPeacefulFoodRegen((ServerPlayer) (Object) this);
+    }
+
+    @WrapWithCondition(
+        method = "tickRegeneration",
+        at = @At(
+            value = "INVOKE",
+            target = "Lnet/minecraft/world/food/FoodData;setFoodLevel(I)V"
+        )
+    )
+    private boolean oimr$guardPeacefulFoodRegen(FoodData instance, int foodLevel) {
+        return HiveMindManager.shouldApplyPeacefulFoodRegen((ServerPlayer) (Object) this);
+    }
+
+    @Inject(method = "tickRegeneration", at = @At("RETURN"))
+    private void oimr$endPeacefulRegen(
+        CallbackInfo ci,
+        @Share("oimrRestoreSuppressCascade") LocalBooleanRef restoreSuppress
+    ) {
+        HiveMindManager.endPeacefulRegenTick(restoreSuppress.get());
+    }
     @WrapWithCondition(
         method = "doTick",
         at = @At(
@@ -83,6 +128,11 @@ public class ServerPlayerMixin {
         HiveMindManager.onRespawnPositionChanged((ServerPlayer) (Object) this, respawnConfig, showMessage);
     }
 
+    @Inject(method = "showEndCredits", at = @At("TAIL"))
+    private void oimr$onShowEndCredits(CallbackInfo ci) {
+        HiveMindManager.onEndCreditsPortalTriggered((ServerPlayer) (Object) this);
+    }
+
     @Inject(method = "die", at = @At("HEAD"))
     private void oimr$beforeDie(DamageSource source, CallbackInfo ci) {
         HiveMindManager.onBeforePlayerDie((ServerPlayer) (Object) this, source);
@@ -90,7 +140,7 @@ public class ServerPlayerMixin {
 
     @Inject(method = "die", at = @At("RETURN"))
     private void oimr$afterDie(DamageSource source, CallbackInfo ci) {
-        HiveMindManager.popDyingDamageSource((ServerPlayer) (Object) this);
+        HiveMindManager.onAfterPlayerDieReturn((ServerPlayer) (Object) this);
     }
 
     @WrapOperation(

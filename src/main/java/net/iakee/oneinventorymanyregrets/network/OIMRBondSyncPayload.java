@@ -34,7 +34,8 @@ public record OIMRBondSyncPayload(int hungerPercent, int effectsPercent, int dam
     public static OIMRBondSyncPayload fromConfig() {
         int hunger = Math.max(0, Math.round(OIMRConfig.getHungerWeight() * 100.0F));
         int affinity = Math.max(OIMRConfig.MIN_AFFINITY, Math.min(OIMRConfig.MAX_AFFINITY, OIMRConfig.getAffinityPercent()));
-        return new OIMRBondSyncPayload(hunger, affinity, affinity);
+        int effects = OIMRConfig.isSyncEffectsEnabled() ? affinity : 0;
+        return new OIMRBondSyncPayload(hunger, effects, affinity);
     }
 
     @Override
