@@ -88,14 +88,14 @@
 - **Contexto:** Ajustar genericamente a proporção de efeitos vanilla (especialmente efeitos com comportamento mecânico/binário) gera resultados estranhos ou difíceis de calibrar. A proposta é criar **efeitos replicados próprios** do mod para representar a transmissão parcial (`0% < afinidade < 100%`), tratados individualmente por efeito cadastrado no jogo.
 - **Exemplo de referência:** Efeito original **Invisibilidade** → efeito replicado **Translucidez**, que reduz o raio de detecção de mobs conforme a afinidade em vez de aplicar invisibilidade total ou falhar binariamente.
 - **Subtarefas:**
-  - [ ] Inventariar todos os efeitos (`MobEffect`) vanilla registrados no jogo e classificar:
+  - [x] Inventariar todos os efeitos (`MobEffect`) vanilla registrados no jogo e classificar:
     - Efeitos puramente numéricos/escaláveis (dano, velocidade, força, resistência, etc.).
     - Efeitos mecânicos/binários que exigem contraparte dedicada (ex.: Invisibilidade → Translucidez, Visão Noturna, Respiração Aquática, Queda Lenta, Brilho, etc.).
     - Política de fallback para efeitos de outros mods ou não mapeados.
-  - [ ] Definir curva/regra de afinidade (`0% < N < 100%`) para duração, amplificador e intensidade da contraparte.
-  - [ ] Registrar os novos `MobEffect`s customizados (identificadores, ícones/texturas, cores, nomes e descrições traduzíveis).
-  - [ ] Garantir que ao mudar afinidade para `100%` ou `0%`, ou ao sair do grupo, os efeitos replicados sejam limpos/substituídos sem vazamento de estado.
-  - [ ] Documentar no `README.md` e cobrir com GameTests os principais efeitos mecânicos.
+  - [x] Definir curva/regra de afinidade (`0% < N < 100%`) para duração, amplificador e intensidade da contraparte.
+  - [x] Registrar os novos `MobEffect`s customizados (identificadores, ícones/texturas, cores, nomes e descrições traduzíveis).
+  - [x] Garantir que ao mudar afinidade para `100%` ou `0%`, ou ao sair do grupo, os efeitos replicados sejam limpos/substituídos sem vazamento de estado.
+  - [x] Documentar no `README.md` e cobrir com GameTests os principais efeitos mecânicos.
 
 ---
 
@@ -105,9 +105,9 @@
   - **Cap em `1x` (padrão inicial):** o grupo sofre no máximo o equivalente a `1 × dano` de lava compartilhado, evitando morte instantânea injusta quando todos caem juntos.
   - **Multiplicativo (até `N × dano`):** cada membro na lava contribui com sua instância de dano propagada ao grupo (comportamento punidor/caótico).
 - **Subtarefas:**
-  - [ ] Definir chave em `OIMRConfig` (ex.: política/enum ou boolean de cap), padrão = cap `1x`, comando `/oimr settings` e controle na `OIMRSettingsScreen`.
-  - [ ] Implementar deduplicação/cap por janela de dano ou tick de lava no servidor, respeitando afinidade atual.
-  - [ ] Adicionar chaves de tradução (`en_us.json` e `pt_br.json`) e GameTests comparando os dois modos com 2+ jogadores na lava.
+  - [x] Definir chave em `OIMRConfig` (ex.: política/enum ou boolean de cap), padrão = cap `1x`, comando `/oimr settings` e controle na `OIMRSettingsScreen`.
+  - [x] Implementar deduplicação/cap por janela de dano ou tick de lava no servidor, respeitando afinidade atual.
+  - [x] Adicionar chaves de tradução (`en_us.json` e `pt_br.json`) e GameTests comparando os dois modos com 2+ jogadores na lava.
 
 ---
 
@@ -117,9 +117,9 @@
   - **Cap em `1x` (padrão inicial):** o gasto de fôlego do grupo tem teto de `1 × fôlego gasto` por tick (como se apenas 1 pulmão estivesse sendo drenado por vez).
   - **Multiplicativo (até `N × fôlego gasto`):** se `N` membros estão submersos, o fôlego compartilhado se esgota até `N` vezes mais rápido.
 - **Subtarefas:**
-  - [ ] Definir chave em `OIMRConfig` (padrão = cap `1x`), comando `/oimr settings` e controle na `OIMRSettingsScreen`.
-  - [ ] Integrar com a lógica de sincronização de `airSupply` e afogamento (incluindo interação com encantamento Respiração / efeito Water Breathing e afinidade).
-  - [ ] Adicionar traduções (`en_us.json` e `pt_br.json`) e GameTests nos dois modos.
+  - [x] Definir chave em `OIMRConfig` (padrão = cap `1x`), comando `/oimr settings` e controle na `OIMRSettingsScreen`.
+  - [x] Integrar com a lógica de sincronização de `airSupply` e afogamento (incluindo interação com encantamento Respiração / efeito Water Breathing e afinidade).
+  - [x] Adicionar traduções (`en_us.json` e `pt_br.json`) e GameTests nos dois modos.
 
 ---
 
@@ -130,10 +130,10 @@
   - **Multiplicativo (`N × dano`):** cada membro afetado propaga seu tick de DoT para o grupo.
 - **Observação de design:** Como o mod sincroniza efeitos (`Poison`, `Wither`) entre membros, sem cap `1x` o modo `Nx` amplifica drasticamente qualquer poção/ataque de Wither. Documentar essa interação claramente na tooltip da setting e avaliar se DoTs ambientais (fogo/cacto/magma) e DoTs de status compartilham a mesma setting ou subopções.
 - **Subtarefas:**
-  - [ ] Catalogar fontes de DoT relevantes (fogo, fogo da alma, poison, wither, congelamento, etc.).
-  - [ ] Definir chave em `OIMRConfig` (padrão = cap `1x`), expor em `/oimr settings` e na `OIMRSettingsScreen`.
-  - [ ] Implementar controle de cap por tipo/fonte de DoT na janela de tick e validar interação com `syncEffects` e `affinity`.
-  - [ ] Adicionar traduções (`en_us.json` e `pt_br.json`) e GameTests.
+  - [x] Catalogar fontes de DoT relevantes (fogo, fogo da alma, poison, wither, congelamento, etc.).
+  - [x] Definir chave em `OIMRConfig` (padrão = cap `1x`), expor em `/oimr settings` e na `OIMRSettingsScreen`.
+  - [x] Implementar controle de cap por tipo/fonte de DoT na janela de tick e validar interação com `syncEffects` e `affinity`.
+  - [x] Adicionar traduções (`en_us.json` e `pt_br.json`) e GameTests.
 
 ---
 
@@ -147,10 +147,10 @@
   - **OCP / DIP (Aberto-Fechado / Inversão de Dependência):** definir contratos/interfaces claros para políticas de dano/efeito/consumo e injetar contexto por instância de `MinecraftServer` (eliminando estado estático global mutável entre mundos/testes).
   - **ISP:** evitar interfaces ou acessores inchados passando apenas o recorte necessário para cada domínio.
 - **Subtarefas:**
-  - [ ] Mapear todas as dependências e estado global atual em `HiveMindManager` e `HiveMind`.
-  - [ ] Desenhar a árvore de pacotes/serviços alvo e o plano de migração incremental **sem alterar formato de save** e mantendo os 47 GameTests verdes a cada etapa.
-  - [ ] Encapsular caches/estados temporários em um coordenador por `MinecraftServer` (fim dos mapas estáticos globais vazando entre sessões).
-  - [ ] Dividir `HiveMindGameTests.java` em suítes menores por domínio (inventário, combate/morte, efeitos, teleporte/áudio, config/persistência).
+  - [x] Mapear todas as dependências e estado global atual em `HiveMindManager` e `HiveMind`.
+  - [x] Desenhar a árvore de pacotes/serviços alvo e o plano de migração incremental **sem alterar formato de save** e mantendo os GameTests verdes a cada etapa (`HiveMindCoordinator` + `net.iakee.oneinventorymanyregrets.hivemind.service.*`).
+  - [x] Encapsular caches/estados temporários em um coordenador por `MinecraftServer` (fim dos mapas estáticos globais vazando entre sessões).
+  - [x] Dividir `HiveMindGameTests.java` em suítes menores por domínio (`InventoryIntegrityGameTests`, `CombatAndDeathGameTests`, `EffectsAndEnvironmentGameTests`, `ProgressionAndSocialGameTests`, `TeleportAndAudioGameTests`, `PersistenceAndConfigGameTests` + `HiveMindTestSupport`).
 
 ---
 
@@ -162,11 +162,11 @@
   - `onEndServerTick` ([HiveMindManager.java](src/main/java/net/iakee/oneinventorymanyregrets/hivemind/HiveMindManager.java#L990)) percorre `data.getAll()` a cada tick.
 - **Impacto:** Saves crescem indefinidamente com jogadores/equipes antigas; recriar uma equipe com o mesmo nome pode herdar inventário/estado antigo; custo do tick escala com hives órfãos.
 - **Subtarefas:**
-  - [ ] Registrar metadado de última atividade (`lastActiveEpoch` / `lastActiveGameTime`) por hive e estado pessoal, preservando compatibilidade na leitura de saves antigos.
-  - [ ] Definir política segura de retenção e identificar equipes removidas/vazias (cuidando do caso de recriação/renomeação intencional de time).
-  - [ ] Criar comando administrativo com modo `--dry-run` / inspeção antes de expurgar definitivamente (ex.: `/oimr cleanup ...`).
-  - [ ] Indexar hives ativos/com membros online para que o tick não itere hives ociosos desnecessariamente.
-  - [ ] Cobrir com GameTests (remoção de equipe, recriação com mesmo nome, limpeza de estado pessoal após saída definitiva).
+  - [x] Registrar metadado de última atividade (`lastActiveEpoch` / `lastActiveGameTime`) por hive e estado pessoal, preservando compatibilidade na leitura de saves antigos.
+  - [x] Definir política segura de retenção (`TeamLifecycleService.CleanupPolicy`) e identificar equipes removidas/vazias (marcando times removidos como órfãos e reiniciando o estado caso um time com o mesmo nome seja recriado).
+  - [x] Criar comando administrativo com modo `dry-run` / inspeção antes de expurgar definitivamente (`/oimr cleanup dry-run [retentionDays]` e `/oimr cleanup confirm [retentionDays]`).
+  - [x] Indexar hives ativos/com membros online (`onlineMembersByHive` em `HiveMindCoordinator`) para que o tick não itere hives ociosos desnecessariamente.
+  - [x] Cobrir com GameTests (remoção de equipe, recriação com mesmo nome, limpeza de estado pessoal após saída definitiva) e testes unitários JUnit (`CleanupPolicyTest`).
 
 ---
 
@@ -177,10 +177,10 @@
   - Em `OIMRConfig.save()` ([OIMRConfig.java](src/main/java/net/iakee/oneinventorymanyregrets/config/OIMRConfig.java#L214-L251)), `Files.newOutputStream(path)` sobrescreve o arquivo diretamente sem arquivo temporário + movimentação atômica ou backup.
 - **Impacto:** Operador é induzido a erro sobre o estado ativo no reload; falha ou queda durante escrita pode truncar/corromper `oneinventorymanyregrets.properties`.
 - **Subtarefas:**
-  - [ ] Carregar e validar todas as propriedades em uma estrutura temporária antes de aplicar em memória.
-  - [ ] Decidir e implementar política transparente de erro no reload (ou aplica `applyDefaults()` de fato, ou mantém valores anteriores com log/retorno explícito ao operador informando que os valores atuais foram mantidos).
-  - [ ] Gravar em arquivo temporário no mesmo diretório, garantir flush/sync e usar `Files.move(..., ATOMIC_MOVE, REPLACE_EXISTING)` com fallback seguro e preservação de `.bak` se desejado.
-  - [ ] Adicionar testes automatizados simulando arquivo inválido/corrompido e erro de leitura no reload.
+  - [x] Carregar e validar todas as propriedades em uma estrutura temporária (`ConfigSnapshot`) antes de aplicar em memória.
+  - [x] Decidir e implementar política transparente de erro no reload (mantém os valores anteriores em memória no reload em runtime sem acionar transição de slots, com log e retorno explícito ao operador; no carregamento inicial aplica defaults reais).
+  - [x] Gravar em arquivo temporário no mesmo diretório, garantir flush/`FileChannel.force(true)` e usar `Files.move(..., ATOMIC_MOVE, REPLACE_EXISTING)` com fallback seguro e preservação de `.bak`.
+  - [x] Adicionar testes automatizados simulando arquivo inválido/corrompido e erro de leitura no reload (`OIMRConfigTest` e `PersistenceAndConfigGameTests`).
 
 ---
 

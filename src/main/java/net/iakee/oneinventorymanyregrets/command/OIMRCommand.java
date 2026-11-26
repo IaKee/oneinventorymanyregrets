@@ -11,6 +11,7 @@ import net.iakee.oneinventorymanyregrets.config.OIMRConfig;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindData;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindManager;
 import net.iakee.oneinventorymanyregrets.hivemind.OIMRLang;
+import net.iakee.oneinventorymanyregrets.hivemind.service.TeamLifecycleService;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
@@ -45,11 +46,40 @@ public final class OIMRCommand {
                             .then(boolSetting(OIMRConfig.KEY_SHARED_PORTALS))
                             .then(boolSetting(OIMRConfig.KEY_UNDERWATER_MUFFLE))
                             .then(boolSetting(OIMRConfig.KEY_SHARED_MOB_SOUNDS))
+                            .then(mobSoundFilterSetting())
+                            .then(
+                                Commands.literal(OIMRConfig.KEY_SHARED_MOB_SOUND_VOLUME)
+                                    .executes(OIMRCommand::executeSettingsStatus)
+                                    .then(
+                                        Commands.argument(
+                                            "percent",
+                                            IntegerArgumentType.integer(
+                                                OIMRConfig.MIN_SHARED_MOB_SOUND_VOLUME,
+                                                OIMRConfig.MAX_SHARED_MOB_SOUND_VOLUME
+                                            )
+                                        ).executes(OIMRCommand::executeSetSharedMobSoundVolume)
+                                    )
+                            )
                             .then(boolSetting(OIMRConfig.KEY_COMUNISM))
                             .then(boolSetting(OIMRConfig.KEY_FRIENDLY_PETS))
                             .then(boolSetting(OIMRConfig.KEY_EXCLUDE_CREATIVE_FROM_DEATH))
                             .then(boolSetting(OIMRConfig.KEY_WIPE_CREATIVE_INVENTORY_ON_DEATH))
                             .then(boolSetting(OIMRConfig.KEY_RANDOM_DEATH_LOOT))
+                            .then(scalingModeSetting(
+                                OIMRConfig.KEY_LAVA_DAMAGE_MODE,
+                                OIMRConfig::getLavaDamageMode,
+                                OIMRConfig::setLavaDamageMode
+                            ))
+                            .then(scalingModeSetting(
+                                OIMRConfig.KEY_UNDERWATER_BREATH_MODE,
+                                OIMRConfig::getUnderwaterBreathMode,
+                                OIMRConfig::setUnderwaterBreathMode
+                            ))
+                            .then(scalingModeSetting(
+                                OIMRConfig.KEY_DOT_DAMAGE_MODE,
+                                OIMRConfig::getDotDamageMode,
+                                OIMRConfig::setDotDamageMode
+                            ))
                             .then(boolSetting(OIMRConfig.KEY_SYNC_EFFECTS))
                             .then(boolSetting(OIMRConfig.KEY_SYNC_HOTBAR))
                             .then(boolSetting(OIMRConfig.KEY_SYNC_HELMET))
@@ -93,6 +123,48 @@ public final class OIMRCommand {
                                     .executes(OIMRCommand::executeReloadSettings)
                             )
                     )
+                    .then(
+                        Commands.literal("cleanup")
+                            .requires(OIMRCommand::canEditSettings)
+                            .executes(context -> executeCleanup(
+                                context,
+                                true,
+                                TeamLifecycleService.DEFAULT_ORPHAN_RETENTION_DAYS,
+                                TeamLifecycleService.DEFAULT_INACTIVE_RETENTION_DAYS
+                            ))
+                            .then(
+                                Commands.literal("dry-run")
+                                    .executes(context -> executeCleanup(
+                                        context,
+                                        true,
+                                        TeamLifecycleService.DEFAULT_ORPHAN_RETENTION_DAYS,
+                                        TeamLifecycleService.DEFAULT_INACTIVE_RETENTION_DAYS
+                                    ))
+                                    .then(
+                                        Commands.argument("retentionDays", IntegerArgumentType.integer(0, 36500))
+                                            .executes(context -> {
+                                                int days = IntegerArgumentType.getInteger(context, "retentionDays");
+                                                return executeCleanup(context, true, days, days);
+                                            })
+                                    )
+                            )
+                            .then(
+                                Commands.literal("confirm")
+                                    .executes(context -> executeCleanup(
+                                        context,
+                                        false,
+                                        TeamLifecycleService.DEFAULT_ORPHAN_RETENTION_DAYS,
+                                        TeamLifecycleService.DEFAULT_INACTIVE_RETENTION_DAYS
+                                    ))
+                                    .then(
+                                        Commands.argument("retentionDays", IntegerArgumentType.integer(0, 36500))
+                                            .executes(context -> {
+                                                int days = IntegerArgumentType.getInteger(context, "retentionDays");
+                                                return executeCleanup(context, false, days, days);
+                                            })
+                                    )
+                            )
+                    )
             )
         );
     }
@@ -120,6 +192,81 @@ public final class OIMRCommand {
                         return 1;
                     })
             );
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> scalingModeSetting(
+        String key,
+        java.util.function.Supplier<OIMRConfig.MultiMemberScalingMode> getter,
+        java.util.function.Consumer<OIMRConfig.MultiMemberScalingMode> setter
+    ) {
+        LiteralArgumentBuilder<CommandSourceStack> builder = Commands.literal(key)
+            .executes(OIMRCommand::executeSettingsStatus);
+        for (OIMRConfig.MultiMemberScalingMode mode : OIMRConfig.MultiMemberScalingMode.values()) {
+            builder.then(
+                Commands.literal(mode.configValue())
+                    .executes(context -> {
+                        setter.accept(mode);
+                        OIMRConfig.MultiMemberScalingMode updated = getter.get();
+                        HiveMindManager.onConfigChanged(context.getSource().getServer());
+                        context.getSource().sendSuccess(
+                            () -> OIMRLang.localizeForSource(
+                                OIMRLang.translatable(
+                                    "oimr.command.setting_updated",
+                                    key,
+                                    OIMRLang.translatable(updated.translationKey())
+                                ),
+                                context.getSource()
+                            ),
+                            true
+                        );
+                        return 1;
+                    })
+            );
+        }
+        return builder;
+    }
+
+    private static LiteralArgumentBuilder<CommandSourceStack> mobSoundFilterSetting() {
+        LiteralArgumentBuilder<CommandSourceStack> builder = Commands.literal(OIMRConfig.KEY_SHARED_MOB_SOUND_FILTER)
+            .executes(OIMRCommand::executeSettingsStatus);
+        for (OIMRConfig.MobSoundFilter filter : OIMRConfig.MobSoundFilter.values()) {
+            builder.then(
+                Commands.literal(filter.configValue())
+                    .executes(context -> {
+                        OIMRConfig.setSharedMobSoundFilter(filter);
+                        OIMRConfig.MobSoundFilter updated = OIMRConfig.getSharedMobSoundFilter();
+                        HiveMindManager.onConfigChanged(context.getSource().getServer());
+                        context.getSource().sendSuccess(
+                            () -> OIMRLang.localizeForSource(
+                                OIMRLang.translatable(
+                                    "oimr.command.setting_updated",
+                                    OIMRConfig.KEY_SHARED_MOB_SOUND_FILTER,
+                                    OIMRLang.translatable(updated.translationKey())
+                                ),
+                                context.getSource()
+                            ),
+                            true
+                        );
+                        return 1;
+                    })
+            );
+        }
+        return builder;
+    }
+
+    private static int executeSetSharedMobSoundVolume(CommandContext<CommandSourceStack> context) {
+        int percent = IntegerArgumentType.getInteger(context, "percent");
+        OIMRConfig.setSharedMobSoundVolumePercent(percent);
+        int updated = OIMRConfig.getSharedMobSoundVolumePercent();
+        HiveMindManager.onConfigChanged(context.getSource().getServer());
+        context.getSource().sendSuccess(
+            () -> OIMRLang.localizeForSource(
+                OIMRLang.translatable("oimr.command.setting_updated.percent", OIMRConfig.KEY_SHARED_MOB_SOUND_VOLUME, updated),
+                context.getSource()
+            ),
+            true
+        );
+        return 1;
     }
 
     /**
@@ -173,10 +320,31 @@ public final class OIMRCommand {
         appendSettingStatus(summary, "oimr.settings.shared_portals", OIMRConfig.isSharedPortalsEnabled());
         appendSettingStatus(summary, "oimr.settings.underwater_muffle", OIMRConfig.isUnderwaterMuffleEnabled());
         appendSettingStatus(summary, "oimr.settings.shared_mob_sounds", OIMRConfig.isSharedMobSoundsEnabled());
+        summary.append(" | ")
+            .append(OIMRLang.translatable("oimr.settings.shared_mob_sound_filter"))
+            .append(": ")
+            .append(OIMRLang.translatable(OIMRConfig.getSharedMobSoundFilter().translationKey()));
+        summary.append(" | ")
+            .append(OIMRLang.translatable(
+                "oimr.settings.shared_mob_sound_volume",
+                OIMRConfig.getSharedMobSoundVolumePercent()
+            ));
         appendSettingStatus(summary, "oimr.settings.friendly_pets", OIMRConfig.isFriendlyPetsEnabled());
         appendSettingStatus(summary, "oimr.settings.exclude_creative", OIMRConfig.isExcludeCreativeFromDeathEnabled());
         appendSettingStatus(summary, "oimr.settings.wipe_creative", OIMRConfig.isWipeCreativeInventoryOnDeathEnabled());
         appendSettingStatus(summary, "oimr.settings.random_death_loot", OIMRConfig.isRandomDeathLootEnabled());
+        summary.append(" | ")
+            .append(OIMRLang.translatable("oimr.settings.lava_damage_mode"))
+            .append(": ")
+            .append(OIMRLang.translatable(OIMRConfig.getLavaDamageMode().translationKey()));
+        summary.append(" | ")
+            .append(OIMRLang.translatable("oimr.settings.underwater_breath_mode"))
+            .append(": ")
+            .append(OIMRLang.translatable(OIMRConfig.getUnderwaterBreathMode().translationKey()));
+        summary.append(" | ")
+            .append(OIMRLang.translatable("oimr.settings.dot_damage_mode"))
+            .append(": ")
+            .append(OIMRLang.translatable(OIMRConfig.getDotDamageMode().translationKey()));
         appendSettingStatus(summary, "oimr.settings.comunism", OIMRConfig.isComunismEnabled());
         return summary;
     }
@@ -248,8 +416,18 @@ public final class OIMRCommand {
     private static int executeReloadSettings(CommandContext<CommandSourceStack> context) {
         MinecraftServer server = context.getSource().getServer();
         ServerPlayer initiator = context.getSource().getEntity() instanceof ServerPlayer player ? player : null;
-        HiveMindManager.reloadConfig(server, initiator);
+        OIMRConfig.ReloadResult result = HiveMindManager.reloadConfig(server, initiator);
         Component summary = formatSettingsSummary();
+        if (!result.isSuccess()) {
+            String reason = result.errorMessage() != null ? result.errorMessage() : "I/O error";
+            context.getSource().sendFailure(
+                OIMRLang.localizeForSource(
+                    OIMRLang.translatable("oimr.command.settings_reload_failed", reason, summary),
+                    context.getSource()
+                )
+            );
+            return 0;
+        }
         context.getSource().sendSuccess(
             () -> OIMRLang.localizeForSource(
                 OIMRLang.translatable("oimr.command.settings_reloaded", summary),
@@ -340,5 +518,42 @@ public final class OIMRCommand {
             false
         );
         return 1;
+    }
+
+    private static int executeCleanup(
+        CommandContext<CommandSourceStack> context,
+        boolean dryRun,
+        int orphanRetentionDays,
+        int inactiveRetentionDays
+    ) {
+        MinecraftServer server = context.getSource().getServer();
+        TeamLifecycleService.CleanupReport report = dryRun
+            ? HiveMindManager.inspectCleanup(server, orphanRetentionDays, inactiveRetentionDays)
+            : HiveMindManager.executeCleanup(server, orphanRetentionDays, inactiveRetentionDays);
+
+        String orphanedSummary = report.orphanedTeamHives().isEmpty()
+            ? "-"
+            : String.join(", ", report.orphanedTeamHives());
+        String inactiveSummary = report.inactiveEmptyTeamHives().isEmpty()
+            ? "-"
+            : String.join(", ", report.inactiveEmptyTeamHives());
+
+        String key = dryRun ? "oimr.command.cleanup.dry_run" : "oimr.command.cleanup.executed";
+        context.getSource().sendSuccess(
+            () -> OIMRLang.localizeForSource(
+                OIMRLang.translatable(
+                    key,
+                    report.orphanedTeamHives().size(),
+                    orphanedSummary,
+                    report.inactiveEmptyTeamHives().size(),
+                    inactiveSummary,
+                    report.stalePersonalStates().size(),
+                    report.totalCount()
+                ),
+                context.getSource()
+            ),
+            !dryRun
+        );
+        return report.totalCount();
     }
 }

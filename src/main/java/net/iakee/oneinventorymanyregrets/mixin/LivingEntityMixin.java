@@ -10,15 +10,20 @@ import com.llamalad7.mixinextras.sugar.ref.LocalFloatRef;
 import com.llamalad7.mixinextras.sugar.ref.LocalRef;
 import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
+import net.iakee.oneinventorymanyregrets.effect.OIMRMobEffects;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveLivingEntityAccess;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindManager;
+import net.minecraft.core.Holder;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.DamageTypeTags;
+import net.minecraft.util.Mth;
 import net.minecraft.util.Prediction;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityEquipment;
 import net.minecraft.world.entity.ExperienceOrb;
@@ -57,6 +62,18 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
 
     @Invoker("checkTotemDeathProtection")
     protected abstract boolean oimr$invokeCheckTotemDeathProtection(DamageSource source);
+
+    @Invoker("updateGlowingStatus")
+    protected abstract void oimr$invokeUpdateGlowingStatus();
+
+    @Shadow
+    public abstract boolean hasEffect(Holder<MobEffect> effect);
+
+    @Shadow
+    public abstract @Nullable MobEffectInstance getEffect(Holder<MobEffect> effect);
+
+    @Shadow
+    public abstract float getArmorCoverPercentage();
 
     @Override
     public EntityEquipment oimr$getEquipment() {
@@ -193,6 +210,155 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
     @Inject(method = "tickEffects", at = @At("RETURN"))
     private void oimr$endTickEffects(CallbackInfo ci) {
         this.oimr$tickingEffects = false;
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (!self.level().isClientSide() && self.hasEffect(OIMRMobEffects.FAINT_GLOW)) {
+            this.oimr$invokeUpdateGlowingStatus();
+        }
+    }
+
+    @Inject(method = "getVisibilityPercent", at = @At("RETURN"), cancellable = true)
+    private void oimr$applyTranslucencyVisibility(ServerLevel serverLevel, @Nullable Entity targetingEntity, CallbackInfoReturnable<Double> cir) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (!self.isInvisible() && self.hasEffect(OIMRMobEffects.TRANSLUCENCY)) {
+            double factor = HiveMindManager.getEffectiveReplicatedEffectFactor(self);
+            if (factor > 0.0D) {
+                float cover = Math.max(0.1F, this.getArmorCoverPercentage());
+                double fullInvisFactor = 0.7D * cover;
+                double translucencyFactor = 1.0D - factor * (1.0D - fullInvisFactor);
+                cir.setReturnValue(Mth.clamp(cir.getReturnValueD() * translucencyFactor, 0.0D, 10.0D));
+            }
+        }
+    }
+
+    @Inject(method = "getEffectiveGravity", at = @At("RETURN"), cancellable = true)
+    private void oimr$applyCushionedFallGravity(CallbackInfoReturnable<Double> cir) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (!self.hasEffect(MobEffects.SLOW_FALLING)
+            && self.getDeltaMovement().y <= 0.0D
+            && (self.hasEffect(OIMRMobEffects.CUSHIONED_FALL) || self.hasEffect(OIMRMobEffects.PARTIAL_LEVITATION))) {
+            double normal = cir.getReturnValueD();
+            double factor = HiveMindManager.getEffectiveReplicatedEffectFactor(self);
+            double slowTarget = Math.min(normal, 0.01D);
+            cir.setReturnValue(Mth.lerp(factor, normal, slowTarget));
+        }
+    }
+
+    @Inject(method = "calculateFallDamage", at = @At("RETURN"), cancellable = true)
+    private void oimr$reduceCushionedFallDamage(double fallDistance, float damageModifier, CallbackInfoReturnable<Integer> cir) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (!self.hasEffect(MobEffects.SLOW_FALLING)
+            && (self.hasEffect(OIMRMobEffects.CUSHIONED_FALL) || self.hasEffect(OIMRMobEffects.PARTIAL_LEVITATION))) {
+            int base = cir.getReturnValueI();
+            if (base > 0) {
+                double factor = HiveMindManager.getEffectiveReplicatedEffectFactor(self);
+                cir.setReturnValue(Math.max(0, Mth.floor(base * (1.0D - factor))));
+            }
+        }
+    }
+
+    @WrapOperation(
+        method = "travelInAir",
+        at = @At(
+            value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/LivingEntity;getEffectiveGravity()D"
+        )
+    )
+    private double oimr$applyPartialLevitationInAir(LivingEntity instance, Operation<Double> original) {
+        double gravity = original.call(instance);
+        MobEffectInstance partialLev = instance.getEffect(OIMRMobEffects.PARTIAL_LEVITATION);
+        if (partialLev != null && !instance.hasEffect(MobEffects.LEVITATION)) {
+            double factor = HiveMindManager.getEffectiveReplicatedEffectFactor(instance);
+            if (factor > 0.0D) {
+                double liftStep = (0.05D * (partialLev.getAmplifier() + 1) - instance.getDeltaMovement().y) * 0.2D;
+                double netDelta = Mth.lerp(factor, -gravity, liftStep);
+                return -netDelta;
+            }
+        }
+        return gravity;
+    }
+
+    @Inject(method = "getDamageAfterMagicAbsorb", at = @At("RETURN"), cancellable = true)
+    private void oimr$applyEmberWardAndWardingAura(DamageSource damageSource, float damage, CallbackInfoReturnable<Float> cir) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        float resolved = cir.getReturnValueF();
+        boolean changed = false;
+        if (!damageSource.is(DamageTypeTags.BYPASSES_EFFECTS)
+            && !damageSource.is(DamageTypeTags.BYPASSES_RESISTANCE)
+            && self.hasEffect(OIMRMobEffects.WARDING_AURA)) {
+            MobEffectInstance warding = self.getEffect(OIMRMobEffects.WARDING_AURA);
+            if (warding != null) {
+                int coarseAbsorb = self.hasEffect(MobEffects.RESISTANCE)
+                    ? (self.getEffect(MobEffects.RESISTANCE).getAmplifier() + 1) * 5
+                    : 0;
+                if (coarseAbsorb < 25) {
+                    int fineAbsorb = warding.getAmplifier() + 1;
+                    int totalAbsorb = Math.min(25, coarseAbsorb + fineAbsorb);
+                    resolved = resolved * ((float) (25 - totalAbsorb) / (float) (25 - coarseAbsorb));
+                    changed = true;
+                }
+            }
+        }
+        if (!damageSource.is(DamageTypeTags.BYPASSES_EFFECTS)
+            && damageSource.is(DamageTypeTags.IS_FIRE)
+            && !self.hasEffect(MobEffects.FIRE_RESISTANCE)
+            && self.hasEffect(OIMRMobEffects.EMBER_WARD)) {
+            float factor = (float) HiveMindManager.getEffectiveReplicatedEffectFactor(self);
+            if (factor > 0.0F) {
+                resolved = Math.max(0.0F, resolved * (1.0F - factor));
+                changed = true;
+            }
+        }
+        if (changed) {
+            cir.setReturnValue(resolved);
+        }
+    }
+
+    @Inject(method = "getJumpBoostPower", at = @At("RETURN"), cancellable = true)
+    private void oimr$applySpringStepJumpBoost(CallbackInfoReturnable<Float> cir) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (self.hasEffect(OIMRMobEffects.SPRING_STEP)) {
+            MobEffectInstance spring = self.getEffect(OIMRMobEffects.SPRING_STEP);
+            if (spring != null) {
+                float extra = 0.02F * (spring.getAmplifier() + 1);
+                cir.setReturnValue(cir.getReturnValueF() + extra);
+            }
+        }
+    }
+
+    @ModifyVariable(
+        method = "travelInWater",
+        at = @At(
+            value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/LivingEntity;moveRelative(FLnet/minecraft/world/phys/Vec3;)V"
+        ),
+        ordinal = 0
+    )
+    private float oimr$applyFluidGraceSwimBoost(float slowDown) {
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (!self.hasEffect(MobEffects.DOLPHINS_GRACE) && self.hasEffect(OIMRMobEffects.FLUID_GRACE)) {
+            float factor = (float) HiveMindManager.getEffectiveReplicatedEffectFactor(self);
+            if (factor > 0.0F) {
+                return Mth.lerp(factor, slowDown, 0.96F);
+            }
+        }
+        return slowDown;
+    }
+
+    @Inject(method = "isCurrentlyGlowing", at = @At("RETURN"), cancellable = true)
+    private void oimr$applyFaintGlowPulse(CallbackInfoReturnable<Boolean> cir) {
+        if (cir.getReturnValueZ()) {
+            return;
+        }
+        LivingEntity self = (LivingEntity) (Object) this;
+        if (!self.level().isClientSide() && self.hasEffect(OIMRMobEffects.FAINT_GLOW)) {
+            double factor = HiveMindManager.getEffectiveReplicatedEffectFactor(self);
+            if (factor > 0.0D) {
+                int onTicks = Math.max(1, (int) Math.round(20.0D * factor));
+                if (Math.floorMod(self.tickCount, 20) < onTicks) {
+                    cir.setReturnValue(true);
+                }
+            }
+        }
     }
 
     @Inject(method = "onEffectAdded", at = @At("TAIL"))
@@ -281,18 +447,18 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
         ),
         cancellable = true
     )
-    private void oimr$suppressDuplicateEnvFireHurt(
+    private void oimr$suppressDuplicateHazardHurt(
         ServerLevel level,
         DamageSource source,
         float damage,
         CallbackInfoReturnable<Boolean> cir,
-        @Share("oimrPreCooldownFireDamage") LocalFloatRef preCooldownDamage,
-        @Share("oimrEnvFireCandidate") LocalBooleanRef envCandidate
+        @Share("oimrPreCooldownHazardDamage") LocalFloatRef preCooldownDamage,
+        @Share("oimrHazardCandidate") LocalBooleanRef hazardCandidate
     ) {
         preCooldownDamage.set(damage);
-        envCandidate.set(true);
-        if (HiveMindManager.shouldSuppressDuplicateEnvFireHurt((LivingEntity) (Object) this, source, damage)) {
-            envCandidate.set(false);
+        hazardCandidate.set(true);
+        if (HiveMindManager.shouldSuppressDuplicateHazardHurt((LivingEntity) (Object) this, source, damage)) {
+            hazardCandidate.set(false);
             cir.setReturnValue(false);
         }
     }
@@ -306,21 +472,21 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
         ),
         argsOnly = true
     )
-    private float oimr$adjustEnvFireHurtDamage(float damage, ServerLevel level, DamageSource source) {
-        return HiveMindManager.adjustEnvFireDamage((LivingEntity) (Object) this, source, damage);
+    private float oimr$adjustHazardHurtDamage(float damage, ServerLevel level, DamageSource source) {
+        return HiveMindManager.adjustHazardDamage((LivingEntity) (Object) this, source, damage);
     }
 
     @Inject(method = "hurtServer", at = @At("RETURN"))
-    private void oimr$recordEnvFireHurt(
+    private void oimr$recordHazardHurt(
         ServerLevel level,
         DamageSource source,
         float damage,
         CallbackInfoReturnable<Boolean> cir,
-        @Share("oimrPreCooldownFireDamage") LocalFloatRef preCooldownDamage,
-        @Share("oimrEnvFireCandidate") LocalBooleanRef envCandidate
+        @Share("oimrPreCooldownHazardDamage") LocalFloatRef preCooldownDamage,
+        @Share("oimrHazardCandidate") LocalBooleanRef hazardCandidate
     ) {
-        if (cir.getReturnValueZ() && envCandidate.get()) {
-            HiveMindManager.recordEnvFireHurtIfApplicable((LivingEntity) (Object) this, source, preCooldownDamage.get());
+        if (cir.getReturnValueZ() && hazardCandidate.get()) {
+            HiveMindManager.recordHazardHurtIfApplicable((LivingEntity) (Object) this, source, preCooldownDamage.get());
         }
     }
 

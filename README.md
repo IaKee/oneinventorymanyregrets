@@ -74,9 +74,11 @@ Comandos disponíveis:
 /oimr settings
 /oimr settings <opção> <valor>
 /oimr settings reload
+/oimr cleanup dry-run [dias]
+/oimr cleanup confirm [dias]
 ```
 
-`status` e `list` são informativos. A edição de configurações é restrita ao host de Singleplayer/LAN ou ao console/RCON de servidor dedicado; jogadores operadores em um servidor dedicado não recebem essa permissão pelo comando atual.
+`status` e `list` são informativos. `settings` e `cleanup` são restritos ao host de Singleplayer/LAN ou ao console/RCON de servidor dedicado; jogadores operadores em um servidor dedicado não recebem essa permissão pelo comando atual. `cleanup dry-run` lista grupos de equipes removidas/órfãs, equipes vazias inativas e estados pessoais obsoletos elegíveis sem modificar o save, enquanto `cleanup confirm` executa o expurgo (padrão: `0` dias para equipes já removidas do placar e `30` dias de inatividade para equipes vazias existentes e estados pessoais não vazios).
 
 ## Configuração
 
@@ -96,6 +98,9 @@ O arquivo é criado em `config/oneinventorymanyregrets.properties`. No cliente, 
 | `excludeCreativeFromDeath` | `true` | exclui criativos da cascata de morte |
 | `wipeCreativeInventoryOnDeath` | `true` | controla limpeza de inventário criativo na morte coletiva |
 | `randomDeathLoot` | `true` | sorteia entre os mortos o local dos drops da morte coletiva |
+| `lavaDamageMode` | `1x` | controla dano de lava com múltiplos membros (`1x` cap ou `nx` multiplicativo) |
+| `underwaterBreathMode` | `1x` | controla gasto de fôlego subaquático com múltiplos membros (`1x` cap ou `nx` multiplicativo) |
+| `dotDamageMode` | `1x` | controla danos contínuos (fogo, poison, wither, congelamento, cacto, bagas) entre múltiplos membros (`1x` cap ou `nx` multiplicativo) |
 | `comunism` | `false` | usa uma mensagem humorística coletiva ao morrer de fome |
 | `syncHotbar` | `true` | sincroniza a hotbar |
 | `syncMainHand` | `true` | sincroniza a mão principal quando a hotbar não força essa sincronização |
@@ -106,6 +111,27 @@ O arquivo é criado em `config/oneinventorymanyregrets.properties`. No cliente, 
 | `syncBoots` | `true` | sincroniza botas |
 
 > **Aviso importante:** o próprio código identifica que desativar a sincronização de hotbar/equipamentos pode causar duplicação ativa de itens ao entrar, trocar de equipe ou mover itens. Mantenha todas as sincronizações ligadas em mundos importantes até esse comportamento ser redesenhado.
+
+### Efeitos replicados em afinidade parcial (`0% < affinity < 100%`)
+
+Quando a afinidade está entre `1%` e `99%`, efeitos puramente numéricos/periódicos (como Velocidade, Força, Veneno, Absorção e Vida Extra) escalam por duração ou valor numérico, enquanto efeitos mecânicos/binários vanilla são transmitidos aos colegas usando efeitos replicados dedicados do próprio mod com duração integral e intensidade proporcional à afinidade:
+
+| Efeito original | Efeito replicado (`oneinventorymanyregrets:*`) | Comportamento parcial |
+| --- | --- | --- |
+| Invisibilidade | `translucency` (Translucidez) | reduz o raio de detecção de mobs e aplica semitransparência visual proporcionalmente à afinidade |
+| Visão Noturna | `twilight_vision` (Visão Crepuscular) | clareia parcialmente a iluminação e névoa proporcionalmente à afinidade |
+| Respiração Aquática | `aquatic_respiration` (Respiração Aquática Parcial) | preserva o fôlego com chance igual à afinidade a cada tick |
+| Queda Lenta | `cushioned_fall` (Queda Amortecida) | interpola a gravidade de queda e reduz dano de queda pela afinidade |
+| Brilho | `faint_glow` (Brilho Tênue) | pulsa o contorno brilhante em cadência proporcional à afinidade |
+| Resistência ao Fogo | `ember_ward` (Proteção Térmica) | reduz dano de fogo/lava e expande visibilidade na lava pela afinidade |
+| Levitação | `partial_levitation` (Flutuação Parcial) | aplica empuxo vertical parcial e reduz dano de queda pela afinidade |
+| Graça do Golfinho | `fluid_grace` (Graça Fluida) | acelera o nado proporcionalmente à afinidade |
+| Poder do Conduto | `conduit_echo` (Eco do Conduto) | combina preservação de ar, visão subaquática e mineração parcial |
+| Fôlego de Náutilo | `nautilus_echo` (Fôlego de Náutilo Parcial) | preserva o ar submerso com chance igual à afinidade |
+
+Para efeitos numéricos/de atributo (`Speed`, `Slowness`, `Haste`, `Mining Fatigue`, `Strength`, `Weakness`, `Jump Boost`, `Resistance`, `Luck`, `Unluck`), o mod aplica interpolação **grosso + fino (5:1)**: cada nível vanilla equivale a **5 níveis** da contraparte fracionária (`fast_walking`, `heavy_step`, `nimble_hands`, `weary_hands`, `might_surge`, `feeble_grip`, `spring_step`, `warding_aura`, `minor_fortune`, `minor_jinx`). Por exemplo, `Speed II` a `60%` de afinidade gera `Speed I` (ajuste grosso) + `Fast Walking I` (ajuste fino, total `+24%`); a cada `5` níveis finos acumulados ocorre a promoção automática para `1` nível completo do efeito original. Abaixo de `1` unidade fina, o nível fino I acumula duração escalada.
+
+Efeitos de outros mods ou não mapeados utilizam fallback determinístico de escala de duração (`duração × afinidade`) com acumulador de resto fracionário e amplificador preservado. Ao alterar a afinidade para `100%` ou `0%`, desativar `syncEffects` ou sair do grupo, os efeitos replicados são removidos automaticamente.
 
 ## Build e testes para contribuidores
 

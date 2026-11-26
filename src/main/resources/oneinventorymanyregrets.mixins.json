@@ -37,10 +37,15 @@
 		"ZombieVillagerMixin"
 	],
 	"client": [
+		"client.AvatarRendererMixin",
 		"client.FogRendererMixin",
 		"client.GuiItemRenderStateMixin",
 		"client.GuiRendererMixin",
+		"client.LavaFogEnvironmentMixin",
 		"client.LevelExtractorMixin",
+		"client.LightmapRenderStateExtractorMixin",
+		"client.LivingEntityRendererMixin",
+		"client.LivingEntityRenderStateMixin",
 		"client.LocalPlayerMixin",
 		"client.OptionsScreenMixin",
 		"client.PlayerTabOverlayMixin",

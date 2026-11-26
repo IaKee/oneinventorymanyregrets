@@ -22,18 +22,24 @@ public final class PersonalInventoryState {
         ItemStackWithSlot.CODEC.listOf().optionalFieldOf("hotbar", List.of()).forGetter(PersonalInventoryState::encodeHotbar),
         Codec.unboundedMap(EquipmentSlot.CODEC, ItemStack.CODEC)
             .optionalFieldOf("equipment", Map.of())
-            .forGetter(PersonalInventoryState::encodeEquipment)
+            .forGetter(PersonalInventoryState::encodeEquipment),
+        Codec.LONG.optionalFieldOf("last_active_epoch", 0L).forGetter(PersonalInventoryState::getLastActiveEpoch),
+        Codec.LONG.optionalFieldOf("last_active_game_time", 0L).forGetter(PersonalInventoryState::getLastActiveGameTime)
     ).apply(instance, PersonalInventoryState::fromCodec));
 
     private final NonNullList<ItemStack> hotbarItems = NonNullList.withSize(HOTBAR_SIZE, ItemStack.EMPTY);
     private final EnumMap<EquipmentSlot, ItemStack> equipmentMap = new EnumMap<>(EquipmentSlot.class);
+    private long lastActiveEpoch;
+    private long lastActiveGameTime;
 
     public PersonalInventoryState() {
     }
 
     private static PersonalInventoryState fromCodec(
         List<ItemStackWithSlot> hotbar,
-        Map<EquipmentSlot, ItemStack> equipment
+        Map<EquipmentSlot, ItemStack> equipment,
+        long lastActiveEpoch,
+        long lastActiveGameTime
     ) {
         PersonalInventoryState state = new PersonalInventoryState();
         for (ItemStackWithSlot entry : hotbar) {
@@ -46,6 +52,8 @@ public final class PersonalInventoryState {
                 state.equipmentMap.put(slot, stack.copy());
             }
         });
+        state.lastActiveEpoch = Math.max(0L, lastActiveEpoch);
+        state.lastActiveGameTime = Math.max(0L, lastActiveGameTime);
         return state;
     }
 
@@ -76,5 +84,40 @@ public final class PersonalInventoryState {
 
     public EnumMap<EquipmentSlot, ItemStack> getEquipmentMap() {
         return this.equipmentMap;
+    }
+
+    public boolean isEmpty() {
+        for (ItemStack stack : this.hotbarItems) {
+            if (!stack.isEmpty()) {
+                return false;
+            }
+        }
+        for (ItemStack stack : this.equipmentMap.values()) {
+            if (!stack.isEmpty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public long getLastActiveEpoch() {
+        return this.lastActiveEpoch;
+    }
+
+    public void setLastActiveEpoch(long lastActiveEpoch) {
+        this.lastActiveEpoch = Math.max(0L, lastActiveEpoch);
+    }
+
+    public long getLastActiveGameTime() {
+        return this.lastActiveGameTime;
+    }
+
+    public void setLastActiveGameTime(long lastActiveGameTime) {
+        this.lastActiveGameTime = Math.max(0L, lastActiveGameTime);
+    }
+
+    public void touchActivity(long epochSeconds, long gameTime) {
+        this.lastActiveEpoch = Math.max(0L, epochSeconds);
+        this.lastActiveGameTime = Math.max(0L, gameTime);
     }
 }

@@ -9,10 +9,12 @@ import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.saveddata.SavedDataType;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.jspecify.annotations.Nullable;
 
 /**
  * World-level persistent storage for all Hive Mind groups and per-player personal slot overrides.
@@ -76,6 +78,22 @@ public final class HiveMindData extends SavedData {
 
     public Collection<HiveMind> getAll() {
         return this.hiveMinds.values();
+    }
+
+    public boolean removeHive(String hiveId) {
+        if (this.hiveMinds.remove(hiveId) != null) {
+            this.setDirty();
+            return true;
+        }
+        return false;
+    }
+
+    public @Nullable PersonalInventoryState getPersonalStateIfPresent(UUID playerId) {
+        return this.personalInventories.get(playerId);
+    }
+
+    public Map<UUID, PersonalInventoryState> getPersonalInventoriesView() {
+        return Collections.unmodifiableMap(this.personalInventories);
     }
 
     public PersonalInventoryState getOrCreatePersonalState(UUID playerId) {

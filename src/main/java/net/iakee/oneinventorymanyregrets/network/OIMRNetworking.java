@@ -10,6 +10,8 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import org.jspecify.annotations.Nullable;
 
+import java.util.Collection;
+import java.util.UUID;
 import java.util.function.BiConsumer;
 
 /**
@@ -29,13 +31,33 @@ public final class OIMRNetworking {
         registered = true;
         PayloadTypeRegistry.clientboundPlay().register(OIMRBondSyncPayload.TYPE, OIMRBondSyncPayload.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(OIMRUnderwaterSyncPayload.TYPE, OIMRUnderwaterSyncPayload.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(OIMRTranslucencySyncPayload.TYPE, OIMRTranslucencySyncPayload.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(OIMRDamageFeedPayload.TYPE, OIMRDamageFeedPayload.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(OIMRFoodFeedPayload.TYPE, OIMRFoodFeedPayload.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(OIMRAirFeedPayload.TYPE, OIMRAirFeedPayload.STREAM_CODEC);
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             syncToPlayer(handler.player);
             HiveMindManager.syncUnderwaterOnJoin(handler.player);
+            HiveMindManager.syncTranslucencyOnJoin(handler.player);
         });
+    }
+
+    public static void syncTranslucencyToPlayer(ServerPlayer player, Collection<UUID> translucentIds) {
+        if (player.connection != null && ServerPlayNetworking.canSend(player, OIMRTranslucencySyncPayload.TYPE)) {
+            ServerPlayNetworking.send(player, OIMRTranslucencySyncPayload.of(translucentIds));
+        }
+    }
+
+    public static void syncTranslucencyToAll(@Nullable MinecraftServer server, Collection<UUID> translucentIds) {
+        if (server == null) {
+            return;
+        }
+        OIMRTranslucencySyncPayload payload = OIMRTranslucencySyncPayload.of(translucentIds);
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (player.connection != null && ServerPlayNetworking.canSend(player, OIMRTranslucencySyncPayload.TYPE)) {
+                ServerPlayNetworking.send(player, payload);
+            }
+        }
     }
 
     public static void syncToPlayer(ServerPlayer player) {

@@ -10,6 +10,7 @@ import net.iakee.oneinventorymanyregrets.network.OIMRAirFeedPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRBondSyncPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRDamageFeedPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRFoodFeedPayload;
+import net.iakee.oneinventorymanyregrets.network.OIMRTranslucencySyncPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRUnderwaterSyncPayload;
 
 public class OIMRClient implements ClientModInitializer {
@@ -22,6 +23,10 @@ public class OIMRClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(
             OIMRUnderwaterSyncPayload.TYPE,
             (payload, context) -> context.client().execute(() -> ClientBondState.updateUnderwater(payload))
+        );
+        ClientPlayNetworking.registerGlobalReceiver(
+            OIMRTranslucencySyncPayload.TYPE,
+            (payload, context) -> context.client().execute(() -> ClientBondState.updateTranslucency(payload))
         );
         ClientPlayNetworking.registerGlobalReceiver(
             OIMRDamageFeedPayload.TYPE,

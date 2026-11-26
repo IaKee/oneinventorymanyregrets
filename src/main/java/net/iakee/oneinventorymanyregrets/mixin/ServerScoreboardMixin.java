@@ -20,7 +20,7 @@ public class ServerScoreboardMixin {
 
     @Inject(method = "addPlayerToTeam", at = @At("HEAD"))
     private void oimr$beforeAddPlayerToTeam(String player, PlayerTeam team, CallbackInfoReturnable<Boolean> cir) {
-        HiveMindManager.beginTeamMutation();
+        HiveMindManager.beginTeamMutation(this.server);
     }
 
     @Inject(method = "addPlayerToTeam", at = @At("RETURN"))
@@ -30,7 +30,7 @@ public class ServerScoreboardMixin {
 
     @Inject(method = "removePlayerFromTeam", at = @At("HEAD"))
     private void oimr$beforeRemovePlayerFromTeam(String player, PlayerTeam team, CallbackInfo ci) {
-        HiveMindManager.beginTeamMutation();
+        HiveMindManager.beginTeamMutation(this.server);
     }
 
     @Inject(method = "removePlayerFromTeam", at = @At("RETURN"))
@@ -38,8 +38,13 @@ public class ServerScoreboardMixin {
         HiveMindManager.endTeamMutation(this.server);
     }
 
+    @Inject(method = "onTeamAdded", at = @At("RETURN"))
+    private void oimr$afterTeamAdded(PlayerTeam team, CallbackInfo ci) {
+        HiveMindManager.onTeamAdded(this.server, team);
+    }
+
     @Inject(method = "onTeamRemoved", at = @At("RETURN"))
     private void oimr$afterTeamRemoved(PlayerTeam team, CallbackInfo ci) {
-        HiveMindManager.syncAllPlayerTeams(this.server);
+        HiveMindManager.onTeamRemoved(this.server, team);
     }
 }

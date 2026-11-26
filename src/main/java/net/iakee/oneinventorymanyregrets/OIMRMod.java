@@ -7,6 +7,7 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.iakee.oneinventorymanyregrets.command.OIMRCommand;
 import net.iakee.oneinventorymanyregrets.config.OIMRConfig;
+import net.iakee.oneinventorymanyregrets.effect.OIMRMobEffects;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindManager;
 import net.iakee.oneinventorymanyregrets.network.OIMRNetworking;
 import org.slf4j.Logger;
@@ -21,6 +22,7 @@ public class OIMRMod implements ModInitializer {
         LOGGER.info("Initializing One Inventory, Many Regrets (Hive Mind)");
 
         OIMRConfig.load();
+        OIMRMobEffects.register();
         OIMRNetworking.register();
         OIMRCommand.register();
 

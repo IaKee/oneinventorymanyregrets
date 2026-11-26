@@ -6,7 +6,12 @@
   "environment": "*",
   "entrypoints": {
     "fabric-gametest": [
-      "net.iakee.oneinventorymanyregrets.HiveMindGameTests"
+      "net.iakee.oneinventorymanyregrets.InventoryIntegrityGameTests",
+      "net.iakee.oneinventorymanyregrets.CombatAndDeathGameTests",
+      "net.iakee.oneinventorymanyregrets.EffectsAndEnvironmentGameTests",
+      "net.iakee.oneinventorymanyregrets.ProgressionAndSocialGameTests",
+      "net.iakee.oneinventorymanyregrets.TeleportAndAudioGameTests",
+      "net.iakee.oneinventorymanyregrets.PersistenceAndConfigGameTests"
     ]
   },
   "depends": {

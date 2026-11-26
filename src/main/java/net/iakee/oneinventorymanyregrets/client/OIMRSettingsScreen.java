@@ -36,6 +36,8 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
     private MultiLineTextWidget affinityDamageIndicator;
     private CycleButton<Boolean> mainHandButton;
     private CycleButton<Boolean> wipeCreativeButton;
+    private CycleButton<OIMRConfig.MobSoundFilter> mobSoundFilterButton;
+    private MobSoundVolumeSlider mobSoundVolumeSlider;
 
     public OIMRSettingsScreen(Screen lastScreen, Options options) {
         super(lastScreen, options, TITLE);
@@ -192,6 +194,36 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
             );
         this.list.addBig(randomDeathLootButton);
 
+        CycleButton<OIMRConfig.MultiMemberScalingMode> lavaModeButton = smallScalingModeCycle(
+            "oimr.settings.lava_damage_mode",
+            "oimr.settings.lava_damage_mode.tooltip",
+            OIMRConfig.getLavaDamageMode(),
+            OIMRConfig::setLavaDamageMode
+        );
+        CycleButton<OIMRConfig.MultiMemberScalingMode> dotModeButton = smallScalingModeCycle(
+            "oimr.settings.dot_damage_mode",
+            "oimr.settings.dot_damage_mode.tooltip",
+            OIMRConfig.getDotDamageMode(),
+            OIMRConfig::setDotDamageMode
+        );
+        this.list.addSmall(lavaModeButton, dotModeButton);
+
+        CycleButton<OIMRConfig.MultiMemberScalingMode> underwaterBreathModeButton = CycleButton.<OIMRConfig.MultiMemberScalingMode>builder(
+                value -> Component.translatable(value.translationKey()),
+                OIMRConfig.getUnderwaterBreathMode()
+            )
+            .withValues(OIMRConfig.MultiMemberScalingMode.values())
+            .withTooltip(v -> Tooltip.create(Component.translatable("oimr.settings.underwater_breath_mode.tooltip")))
+            .create(
+                0,
+                0,
+                310,
+                20,
+                Component.translatable("oimr.settings.underwater_breath_mode"),
+                (button, value) -> applySetting(() -> OIMRConfig.setUnderwaterBreathMode(value))
+            );
+        this.list.addBig(underwaterBreathModeButton);
+
         CycleButton<Boolean> comunismButton = CycleButton.onOffBuilder(OIMRConfig.isComunismEnabled())
             .withTooltip(v -> Tooltip.create(Component.translatable("oimr.settings.comunism.tooltip")))
             .create(
@@ -211,10 +243,53 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
             smallToggle("oimr.settings.shared_ender_pearl", "oimr.settings.shared_ender_pearl.tooltip", OIMRConfig.isSharedEnderPearlEnabled(), OIMRConfig.KEY_SHARED_ENDER_PEARL),
             smallToggle("oimr.settings.shared_portals", "oimr.settings.shared_portals.tooltip", OIMRConfig.isSharedPortalsEnabled(), OIMRConfig.KEY_SHARED_PORTALS)
         );
+        boolean sharedMobSounds = OIMRConfig.isSharedMobSoundsEnabled();
+        OIMRConfig.MobSoundFilter initialMobSoundFilter = OIMRConfig.getSharedMobSoundFilter();
+        CycleButton<Boolean> sharedMobSoundsButton = CycleButton.onOffBuilder(sharedMobSounds)
+            .withTooltip(v -> Tooltip.create(Component.translatable("oimr.settings.shared_mob_sounds.tooltip")))
+            .create(
+                0,
+                0,
+                150,
+                20,
+                Component.translatable("oimr.settings.shared_mob_sounds"),
+                (button, value) -> {
+                    applyBooleanSetting(OIMRConfig.KEY_SHARED_MOB_SOUNDS, value);
+                    OIMRConfig.MobSoundFilter currentFilter = this.mobSoundFilterButton != null
+                        ? this.mobSoundFilterButton.getValue()
+                        : OIMRConfig.getSharedMobSoundFilter();
+                    updateMobSoundControlsState(value, currentFilter);
+                }
+            );
         this.list.addSmall(
             smallToggle("oimr.settings.underwater_muffle", "oimr.settings.underwater_muffle.tooltip", OIMRConfig.isUnderwaterMuffleEnabled(), OIMRConfig.KEY_UNDERWATER_MUFFLE),
-            smallToggle("oimr.settings.shared_mob_sounds", "oimr.settings.shared_mob_sounds.tooltip", OIMRConfig.isSharedMobSoundsEnabled(), OIMRConfig.KEY_SHARED_MOB_SOUNDS)
+            sharedMobSoundsButton
         );
+
+        this.mobSoundFilterButton = CycleButton.<OIMRConfig.MobSoundFilter>builder(
+                value -> Component.translatable(value.translationKey()),
+                initialMobSoundFilter
+            )
+            .withValues(OIMRConfig.MobSoundFilter.values())
+            .withTooltip(v -> Tooltip.create(Component.translatable("oimr.settings.shared_mob_sound_filter.tooltip")))
+            .create(
+                0,
+                0,
+                310,
+                20,
+                Component.translatable("oimr.settings.shared_mob_sound_filter"),
+                (button, value) -> {
+                    applySetting(() -> OIMRConfig.setSharedMobSoundFilter(value));
+                    updateMobSoundControlsState(sharedMobSoundsButton.getValue(), value);
+                }
+            );
+        this.list.addBig(this.mobSoundFilterButton);
+
+        this.mobSoundVolumeSlider = new MobSoundVolumeSlider(310, 20, OIMRConfig.getSharedMobSoundVolumePercent());
+        this.mobSoundVolumeSlider.setTooltip(Tooltip.create(Component.translatable("oimr.settings.shared_mob_sound_volume.tooltip")));
+        this.list.addBig(this.mobSoundVolumeSlider);
+
+        updateMobSoundControlsState(sharedMobSounds, initialMobSoundFilter);
     }
 
     @Override
@@ -270,6 +345,28 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
                 20,
                 Component.translatable(labelKey),
                 (button, value) -> applyBooleanSetting(configKey, value)
+            );
+    }
+
+    private CycleButton<OIMRConfig.MultiMemberScalingMode> smallScalingModeCycle(
+        String labelKey,
+        String tooltipKey,
+        OIMRConfig.MultiMemberScalingMode initialValue,
+        java.util.function.Consumer<OIMRConfig.MultiMemberScalingMode> setter
+    ) {
+        return CycleButton.<OIMRConfig.MultiMemberScalingMode>builder(
+                value -> Component.translatable(value.translationKey()),
+                initialValue
+            )
+            .withValues(OIMRConfig.MultiMemberScalingMode.values())
+            .withTooltip(v -> Tooltip.create(Component.translatable(tooltipKey)))
+            .create(
+                0,
+                0,
+                150,
+                20,
+                Component.translatable(labelKey),
+                (button, value) -> applySetting(() -> setter.accept(value))
             );
     }
 
@@ -412,6 +509,56 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
             float weight = snappedWeight();
             this.displayWeight = weight;
             applySetting(() -> this.setter.accept(weight));
+        }
+    }
+
+    private void updateMobSoundControlsState(boolean sharedMobSoundsEnabled, OIMRConfig.MobSoundFilter filter) {
+        if (this.mobSoundFilterButton != null) {
+            this.mobSoundFilterButton.active = sharedMobSoundsEnabled;
+        }
+        if (this.mobSoundVolumeSlider != null) {
+            this.mobSoundVolumeSlider.active = sharedMobSoundsEnabled && filter != OIMRConfig.MobSoundFilter.NONE;
+        }
+    }
+
+    private final class MobSoundVolumeSlider extends AbstractSliderButton {
+        private int displayPercent;
+
+        private MobSoundVolumeSlider(int width, int height, int initialPercent) {
+            super(
+                0,
+                0,
+                width,
+                height,
+                Component.empty(),
+                Mth.clamp(initialPercent / 100.0D, 0.0D, 1.0D)
+            );
+            this.displayPercent = Mth.clamp(
+                initialPercent,
+                OIMRConfig.MIN_SHARED_MOB_SOUND_VOLUME,
+                OIMRConfig.MAX_SHARED_MOB_SOUND_VOLUME
+            );
+            this.updateMessage();
+        }
+
+        private int snappedPercent() {
+            return Mth.clamp(
+                (int) Math.round(this.value * 100.0D),
+                OIMRConfig.MIN_SHARED_MOB_SOUND_VOLUME,
+                OIMRConfig.MAX_SHARED_MOB_SOUND_VOLUME
+            );
+        }
+
+        @Override
+        protected void updateMessage() {
+            this.setMessage(Component.translatable("oimr.settings.shared_mob_sound_volume", this.displayPercent));
+        }
+
+        @Override
+        protected void applyValue() {
+            int percent = snappedPercent();
+            this.displayPercent = percent;
+            applySetting(() -> OIMRConfig.setSharedMobSoundVolumePercent(percent));
         }
     }
 }

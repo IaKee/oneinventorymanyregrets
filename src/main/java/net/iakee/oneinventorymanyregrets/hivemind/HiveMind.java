@@ -169,7 +169,11 @@ public final class HiveMind {
         Codec.unboundedMap(Codec.STRING, PlayerRemainderState.CODEC)
             .optionalFieldOf("player_remainders", Map.of())
             .forGetter(HiveMind::encodePlayerRemainders),
-        ItemStack.CODEC.listOf().optionalFieldOf("pending_sync_drops", List.of()).forGetter(HiveMind::encodePendingSyncDrops)
+        ItemStack.CODEC.listOf().optionalFieldOf("pending_sync_drops", List.of()).forGetter(HiveMind::encodePendingSyncDrops),
+        Codec.LONG.optionalFieldOf("last_active_epoch", 0L).forGetter(HiveMind::getLastActiveEpoch),
+        Codec.LONG.optionalFieldOf("last_active_game_time", 0L).forGetter(HiveMind::getLastActiveGameTime),
+        Codec.BOOL.optionalFieldOf("orphaned", false).forGetter(HiveMind::isOrphaned),
+        Codec.LONG.optionalFieldOf("orphaned_epoch", 0L).forGetter(HiveMind::getOrphanedEpoch)
     ).apply(instance, HiveMind::fromCodec));
 
     private final String id;
@@ -194,13 +198,69 @@ public final class HiveMind {
     private final Set<ResourceKey<Recipe<?>>> highlightRecipes;
     private final Map<UUID, MutablePlayerRemainders> playerRemainders;
     private final List<ItemStack> pendingSyncDrops;
+    private long lastActiveEpoch;
+    private long lastActiveGameTime;
+    private boolean orphaned;
+    private long orphanedEpoch;
+
+    public enum HazardCapCategory {
+        LAVA,
+        DROWN,
+        FIRE,
+        FREEZE,
+        POISON,
+        WITHER,
+        CACTUS,
+        SWEET_BERRY_BUSH
+    }
+
+    public static final class HazardWindowState {
+        private long windowStartTick = Long.MIN_VALUE;
+        private float maxPreCooldownDamage = 0.0F;
+        private @Nullable UUID primarySourcePlayer = null;
+        private final Map<UUID, Float> sharedDamageReceived = new HashMap<>();
+
+        public long getWindowStartTick() {
+            return this.windowStartTick;
+        }
+
+        public float getMaxPreCooldownDamage() {
+            return this.maxPreCooldownDamage;
+        }
+
+        public @Nullable UUID getPrimarySourcePlayer() {
+            return this.primarySourcePlayer;
+        }
+
+        public float getSharedDamageReceived(UUID playerId) {
+            return this.sharedDamageReceived.getOrDefault(playerId, 0.0F);
+        }
+
+        public void recordSharedDamageReceived(UUID playerId, float amount) {
+            if (amount > 0.0F) {
+                this.sharedDamageReceived.merge(playerId, amount, Float::sum);
+            }
+        }
+
+        public void resetWindow(long gameTime, float preCooldownDamage, @Nullable UUID sourcePlayer) {
+            this.windowStartTick = gameTime;
+            this.maxPreCooldownDamage = preCooldownDamage;
+            this.primarySourcePlayer = sourcePlayer;
+            this.sharedDamageReceived.clear();
+        }
+
+        public void updateMaxPreCooldownDamage(float preCooldownDamage) {
+            if (preCooldownDamage > this.maxPreCooldownDamage) {
+                this.maxPreCooldownDamage = preCooldownDamage;
+            }
+        }
+    }
 
     private long lastFoodTickGameTime = -1L;
     private long lastPeacefulRegenTickGameTime = -1L;
     private long lastEnvironmentTickGameTime = -1L;
     private long lastFreezeIncrementGameTime = -1L;
-    private long lastEnvFireHurtTick = Long.MIN_VALUE;
-    private float lastEnvFireHurtDamage = 0.0F;
+    private final EnumMap<HazardCapCategory, HazardWindowState> hazardWindows = new EnumMap<>(HazardCapCategory.class);
     private boolean anyMemberUnderwater = false;
     private double xpRemainder = 0.0D;
     private double xpLevelRemainder = 0.0D;
@@ -250,10 +310,18 @@ public final class HiveMind {
         VitalsState vitals,
         ProgressState progress,
         Map<String, PlayerRemainderState> remainders,
-        List<ItemStack> pendingSyncDrops
+        List<ItemStack> pendingSyncDrops,
+        long lastActiveEpoch,
+        long lastActiveGameTime,
+        boolean orphaned,
+        long orphanedEpoch
     ) {
         HiveMind hive = new HiveMind(id);
         hive.initialized = initialized;
+        hive.lastActiveEpoch = Math.max(0L, lastActiveEpoch);
+        hive.lastActiveGameTime = Math.max(0L, lastActiveGameTime);
+        hive.orphaned = orphaned;
+        hive.orphanedEpoch = orphaned ? Math.max(0L, orphanedEpoch) : 0L;
 
         for (ItemStackWithSlot entry : invState.items()) {
             if (entry.isValidInContainer(MAIN_INVENTORY_SIZE)) {
@@ -446,6 +514,50 @@ public final class HiveMind {
         this.initialized = true;
     }
 
+    public long getLastActiveEpoch() {
+        return this.lastActiveEpoch;
+    }
+
+    public void setLastActiveEpoch(long lastActiveEpoch) {
+        this.lastActiveEpoch = Math.max(0L, lastActiveEpoch);
+    }
+
+    public long getLastActiveGameTime() {
+        return this.lastActiveGameTime;
+    }
+
+    public void setLastActiveGameTime(long lastActiveGameTime) {
+        this.lastActiveGameTime = Math.max(0L, lastActiveGameTime);
+    }
+
+    public boolean isOrphaned() {
+        return this.orphaned;
+    }
+
+    public long getOrphanedEpoch() {
+        return this.orphanedEpoch;
+    }
+
+    public void markOrphaned(long epochSeconds) {
+        this.orphaned = true;
+        if (this.orphanedEpoch <= 0L) {
+            this.orphanedEpoch = Math.max(0L, epochSeconds);
+        }
+    }
+
+    public void clearOrphaned() {
+        this.orphaned = false;
+        this.orphanedEpoch = 0L;
+    }
+
+    public void touchActivity(long epochSeconds, long gameTime) {
+        this.lastActiveEpoch = Math.max(0L, epochSeconds);
+        this.lastActiveGameTime = Math.max(0L, gameTime);
+        if (this.orphaned) {
+            clearOrphaned();
+        }
+    }
+
     public void initializeFrom(ServerPlayer player, PersonalInventoryState personal) {
         NonNullList<ItemStack> playerItems = ((HiveInventoryAccess) player.getInventory()).oimr$getItems();
         for (int i = 0; i < MAIN_INVENTORY_SIZE; i++) {
@@ -530,8 +642,7 @@ public final class HiveMind {
         this.ticksFrozen = 0;
         this.effects.clear();
         this.playerRemainders.clear();
-        this.lastEnvFireHurtTick = Long.MIN_VALUE;
-        this.lastEnvFireHurtDamage = 0.0F;
+        this.hazardWindows.clear();
     }
 
     public void resetExperience() {
@@ -903,10 +1014,21 @@ public final class HiveMind {
         this.lastPeacefulRegenTickGameTime = -1L;
         this.lastEnvironmentTickGameTime = -1L;
         this.lastFreezeIncrementGameTime = -1L;
-        this.lastEnvFireHurtTick = Long.MIN_VALUE;
-        this.lastEnvFireHurtDamage = 0.0F;
+        this.hazardWindows.clear();
         this.anyMemberUnderwater = false;
         this.primaryEffectTickers.clear();
+    }
+
+    public HazardWindowState getOrCreateHazardWindow(HazardCapCategory category) {
+        return this.hazardWindows.computeIfAbsent(category, ignored -> new HazardWindowState());
+    }
+
+    public @Nullable HazardWindowState getHazardWindowIfPresent(HazardCapCategory category) {
+        return this.hazardWindows.get(category);
+    }
+
+    public void clearHazardWindows() {
+        this.hazardWindows.clear();
     }
 
     public boolean tryClaimFoodTick(long gameTime) {
@@ -923,19 +1045,6 @@ public final class HiveMind {
         }
         this.lastPeacefulRegenTickGameTime = gameTime;
         return true;
-    }
-
-    public long getLastEnvFireHurtTick() {
-        return this.lastEnvFireHurtTick;
-    }
-
-    public float getLastEnvFireHurtDamage() {
-        return this.lastEnvFireHurtDamage;
-    }
-
-    public void recordEnvFireHurt(long gameTime, float damage) {
-        this.lastEnvFireHurtTick = gameTime;
-        this.lastEnvFireHurtDamage = damage;
     }
 
     public boolean isAnyMemberUnderwater() {
