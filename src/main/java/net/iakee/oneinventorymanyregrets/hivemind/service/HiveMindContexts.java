@@ -186,6 +186,10 @@ public final class HiveMindContexts {
         boolean isSyncingRespawn();
 
         void setSyncingRespawn(boolean syncing);
+
+        boolean isSyncingGroupSleep();
+
+        void setSyncingGroupSleep(boolean syncing);
     }
 
     public interface DeathCascade extends HiveLookup {
@@ -240,6 +244,10 @@ public final class HiveMindContexts {
         void setRecentMobSoundGameTime(long gameTime);
 
         List<Mob> activeMobSoundSources();
+
+        List<Boolean> itemBreakHandledStack();
+
+        Map<UUID, Long> lastCaveSoundGameTimes();
     }
 
     public interface TeamLifecycle extends HiveLookup {
@@ -286,6 +294,10 @@ public final class HiveMindContexts {
         boolean isLastAppliedSyncEffects();
 
         void setLastAppliedSyncEffects(boolean enabled);
+
+        boolean isLastAppliedSyncAdvancements();
+
+        void setLastAppliedSyncAdvancements(boolean enabled);
 
         int getLastAppliedAffinityPercent();
 

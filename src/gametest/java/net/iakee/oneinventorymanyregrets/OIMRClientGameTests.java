@@ -2,6 +2,7 @@ package net.iakee.oneinventorymanyregrets;
 
 import net.fabricmc.fabric.api.client.gametest.v1.FabricClientGameTest;
 import net.fabricmc.fabric.api.client.gametest.v1.context.ClientGameTestContext;
+import net.fabricmc.fabric.api.client.gametest.v1.context.TestSingleplayerContext;
 import net.iakee.oneinventorymanyregrets.client.ClientHudFeedState;
 import net.iakee.oneinventorymanyregrets.client.ClientUnderwaterState;
 import net.iakee.oneinventorymanyregrets.client.OIMRSettingsScreen;
@@ -124,6 +125,34 @@ public final class OIMRClientGameTests implements FabricClientGameTest {
                     throw new AssertionError("Re-enabling Shared Mob Sounds must reactivate filter and volume slider");
                 }
 
+                // 3b. Verify Shared Cave Sounds toggle updates config
+                CycleButton<?> sharedCaveSoundsBtn = findCycleButtonByPrefix(optionWidgets, "oimr.settings.shared_cave_sounds");
+                if (!OIMRConfig.isSharedCaveSoundsEnabled()) {
+                    throw new AssertionError("Shared Cave Sounds must default to ON");
+                }
+                pressButton(sharedCaveSoundsBtn);
+                if (OIMRConfig.isSharedCaveSoundsEnabled()) {
+                    throw new AssertionError("Disabling Shared Cave Sounds must update config");
+                }
+                pressButton(sharedCaveSoundsBtn);
+                if (!OIMRConfig.isSharedCaveSoundsEnabled()) {
+                    throw new AssertionError("Re-enabling Shared Cave Sounds must restore config");
+                }
+
+                // 3c. Verify Sync Advancements toggle defaults ON and updates config
+                CycleButton<?> syncAdvancementsBtn = findCycleButtonByPrefix(optionWidgets, "oimr.settings.sync_advancements");
+                if (!OIMRConfig.isSyncAdvancementsEnabled()) {
+                    throw new AssertionError("Sync Advancements must default to ON");
+                }
+                pressButton(syncAdvancementsBtn);
+                if (OIMRConfig.isSyncAdvancementsEnabled()) {
+                    throw new AssertionError("Disabling Sync Advancements must update config");
+                }
+                pressButton(syncAdvancementsBtn);
+                if (!OIMRConfig.isSyncAdvancementsEnabled()) {
+                    throw new AssertionError("Re-enabling Sync Advancements must restore config");
+                }
+
                 // 4. Scroll the options list to the bottom and confirm footer Reset/Done stay inside 640x360
                 OptionsList list = findOptionsList(settingsScreen);
                 list.setScrollAmount(Double.MAX_VALUE);
@@ -150,6 +179,18 @@ public final class OIMRClientGameTests implements FabricClientGameTest {
 
             context.setScreen(TitleScreen::new);
             context.waitForScreen(TitleScreen.class);
+
+            // 6. Smoke-test joining and ticking a singleplayer world so client-side
+            // world/player mixins (e.g. BiomeAmbientSoundsHandlerMixin) are exercised.
+            try (TestSingleplayerContext singleplayer = context.worldBuilder().create()) {
+                singleplayer.getConnection().waitForChunksDownload();
+                context.waitTicks(2);
+                context.runOnClient(minecraft -> {
+                    if (minecraft.player == null || minecraft.level == null) {
+                        throw new AssertionError("Expected LocalPlayer and ClientLevel after joining singleplayer world");
+                    }
+                });
+            }
         } finally {
             try {
                 if (hadConfig && previousConfig != null) {

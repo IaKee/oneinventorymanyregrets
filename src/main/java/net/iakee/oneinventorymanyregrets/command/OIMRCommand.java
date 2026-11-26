@@ -47,6 +47,7 @@ public final class OIMRCommand {
                             .then(boolSetting(OIMRConfig.KEY_SHARED_PORTALS))
                             .then(boolSetting(OIMRConfig.KEY_UNDERWATER_MUFFLE))
                             .then(boolSetting(OIMRConfig.KEY_SHARED_MOB_SOUNDS))
+                            .then(boolSetting(OIMRConfig.KEY_SHARED_CAVE_SOUNDS))
                             .then(mobSoundFilterSetting())
                             .then(
                                 Commands.literal(OIMRConfig.KEY_SHARED_MOB_SOUND_VOLUME)
@@ -82,6 +83,7 @@ public final class OIMRCommand {
                                 OIMRConfig::setDotDamageMode
                             ))
                             .then(boolSetting(OIMRConfig.KEY_SYNC_EFFECTS))
+                            .then(boolSetting(OIMRConfig.KEY_SYNC_ADVANCEMENTS))
                             .then(boolSetting(OIMRConfig.KEY_SYNC_HOTBAR))
                             .then(boolSetting(OIMRConfig.KEY_SYNC_HELMET))
                             .then(boolSetting(OIMRConfig.KEY_SYNC_CHESTPLATE))
@@ -323,6 +325,7 @@ public final class OIMRCommand {
             ));
 
         appendSettingStatus(summary, "oimr.settings.sync_effects", OIMRConfig.isSyncEffectsEnabled());
+        appendSettingStatus(summary, "oimr.settings.sync_advancements", OIMRConfig.isSyncAdvancementsEnabled());
         appendSettingStatus(summary, "oimr.settings.sync_hotbar", OIMRConfig.isSyncHotbarEnabled());
         appendSettingStatus(summary, "oimr.settings.sync_helmet", OIMRConfig.isSyncHelmetEnabled());
         appendSettingStatus(summary, "oimr.settings.sync_chestplate", OIMRConfig.isSyncChestplateEnabled());
@@ -335,6 +338,7 @@ public final class OIMRCommand {
         appendSettingStatus(summary, "oimr.settings.shared_portals", OIMRConfig.isSharedPortalsEnabled());
         appendSettingStatus(summary, "oimr.settings.underwater_muffle", OIMRConfig.isUnderwaterMuffleEnabled());
         appendSettingStatus(summary, "oimr.settings.shared_mob_sounds", OIMRConfig.isSharedMobSoundsEnabled());
+        appendSettingStatus(summary, "oimr.settings.shared_cave_sounds", OIMRConfig.isSharedCaveSoundsEnabled());
         summary.append(" | ")
             .append(OIMRLang.translatable("oimr.settings.shared_mob_sound_filter"))
             .append(": ")

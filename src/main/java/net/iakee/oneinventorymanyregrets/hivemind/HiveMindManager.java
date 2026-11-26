@@ -7,6 +7,7 @@ import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.core.Holder;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -18,6 +19,7 @@ import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.npc.villager.Villager;
@@ -601,6 +603,55 @@ public final class HiveMindManager {
         HiveMindCoordinator.getOrCreate(level.getServer())
             .teleportAndAudio()
             .onMobSoundEmitted(level, except, mobPos, sound, source, volume, pitch, seed);
+    }
+
+    public static void beginItemBreakHook(ServerPlayer player) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(player);
+        if (coordinator != null) {
+            coordinator.teleportAndAudio().beginItemBreakHook();
+        }
+    }
+
+    public static void onPlayerEquippedItemBroken(ServerPlayer source, ItemStack brokenItem, net.minecraft.world.entity.EquipmentSlot inSlot) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(source);
+        if (coordinator != null) {
+            coordinator.teleportAndAudio().onPlayerEquippedItemBroken(source, brokenItem, inSlot);
+        }
+    }
+
+    public static void endItemBreakHook(ServerPlayer player, ItemStack brokenItem) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(player);
+        if (coordinator != null) {
+            coordinator.teleportAndAudio().endItemBreakHook(player, brokenItem);
+        }
+    }
+
+    public static void onCaveSoundEmitted(
+        ServerPlayer source,
+        Identifier soundId,
+        double offsetX,
+        double offsetY,
+        double offsetZ,
+        long seed
+    ) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(source);
+        if (coordinator != null) {
+            coordinator.teleportAndAudio().onCaveSoundEmitted(source, soundId, offsetX, offsetY, offsetZ, seed);
+        }
+    }
+
+    public static void onPlayerStartedSleeping(ServerPlayer source) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(source);
+        if (coordinator != null) {
+            coordinator.progressionAndSocial().onPlayerStartedSleeping(source);
+        }
+    }
+
+    public static void onPlayerStoppedSleeping(ServerPlayer source, boolean forcefulWakeUp, boolean updateLevelList) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(source);
+        if (coordinator != null) {
+            coordinator.progressionAndSocial().onPlayerStoppedSleeping(source, forcefulWakeUp, updateLevelList);
+        }
     }
 
     public static void onPlayerKnockback(

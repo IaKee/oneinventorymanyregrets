@@ -66,6 +66,7 @@ public final class HiveMindCoordinator implements HiveMindContext {
     private boolean pendingInvalidAffinityChatWarning = false;
     private OIMRConfig.SlotSyncState lastAppliedSlotSync = OIMRConfig.SlotSyncState.ALL_SYNCED;
     private boolean lastAppliedSyncEffects = true;
+    private boolean lastAppliedSyncAdvancements = true;
     private int lastAppliedAffinityPercent = OIMRConfig.MAX_AFFINITY;
 
     private boolean syncingEffects = false;
@@ -79,6 +80,7 @@ public final class HiveMindCoordinator implements HiveMindContext {
     private boolean syncingRecipes = false;
     private boolean syncingEnvironment = false;
     private boolean syncingRespawn = false;
+    private boolean syncingGroupSleep = false;
     private boolean syncingKnockback = false;
     private boolean syncingGroupTeleport = false;
     private boolean handlingGroupTotem = false;
@@ -86,6 +88,8 @@ public final class HiveMindCoordinator implements HiveMindContext {
     private boolean cascadingDeath = false;
     private boolean closingDeathContainer = false;
     private final ThreadLocal<List<Mob>> activeMobSoundSources = ThreadLocal.withInitial(ArrayList::new);
+    private final ThreadLocal<List<Boolean>> itemBreakHandledStack = ThreadLocal.withInitial(ArrayList::new);
+    private final Map<UUID, Long> lastCaveSoundGameTimes = new HashMap<>();
 
     private final TeamLifecycleService teamLifecycleService;
     private final InventoryAndAmmoService inventoryAndAmmoService;
@@ -152,6 +156,7 @@ public final class HiveMindCoordinator implements HiveMindContext {
         this.pendingInvalidAffinityChatWarning = false;
         this.lastAppliedSlotSync = OIMRConfig.getSlotSyncState();
         this.lastAppliedSyncEffects = OIMRConfig.isSyncEffectsEnabled();
+        this.lastAppliedSyncAdvancements = OIMRConfig.isSyncAdvancementsEnabled();
         this.lastAppliedAffinityPercent = OIMRConfig.getAffinityPercent();
         this.syncingEffects = false;
         this.syncingHealth = false;
@@ -164,6 +169,7 @@ public final class HiveMindCoordinator implements HiveMindContext {
         this.syncingRecipes = false;
         this.syncingEnvironment = false;
         this.syncingRespawn = false;
+        this.syncingGroupSleep = false;
         this.syncingKnockback = false;
         this.syncingGroupTeleport = false;
         this.handlingGroupTotem = false;
@@ -171,6 +177,8 @@ public final class HiveMindCoordinator implements HiveMindContext {
         this.cascadingDeath = false;
         this.closingDeathContainer = false;
         this.activeMobSoundSources.remove();
+        this.itemBreakHandledStack.remove();
+        this.lastCaveSoundGameTimes.clear();
     }
 
     @Override
@@ -327,6 +335,8 @@ public final class HiveMindCoordinator implements HiveMindContext {
     @Override public void setLastAppliedSlotSync(OIMRConfig.SlotSyncState state) { this.lastAppliedSlotSync = state; }
     @Override public boolean isLastAppliedSyncEffects() { return this.lastAppliedSyncEffects; }
     @Override public void setLastAppliedSyncEffects(boolean enabled) { this.lastAppliedSyncEffects = enabled; }
+    @Override public boolean isLastAppliedSyncAdvancements() { return this.lastAppliedSyncAdvancements; }
+    @Override public void setLastAppliedSyncAdvancements(boolean enabled) { this.lastAppliedSyncAdvancements = enabled; }
     @Override public int getLastAppliedAffinityPercent() { return this.lastAppliedAffinityPercent; }
     @Override public void setLastAppliedAffinityPercent(int percent) { this.lastAppliedAffinityPercent = percent; }
     @Override public boolean isSyncingEffects() { return this.syncingEffects; }
@@ -351,6 +361,8 @@ public final class HiveMindCoordinator implements HiveMindContext {
     @Override public void setSyncingEnvironment(boolean syncing) { this.syncingEnvironment = syncing; }
     @Override public boolean isSyncingRespawn() { return this.syncingRespawn; }
     @Override public void setSyncingRespawn(boolean syncing) { this.syncingRespawn = syncing; }
+    @Override public boolean isSyncingGroupSleep() { return this.syncingGroupSleep; }
+    @Override public void setSyncingGroupSleep(boolean syncing) { this.syncingGroupSleep = syncing; }
     @Override public boolean isSyncingKnockback() { return this.syncingKnockback; }
     @Override public void setSyncingKnockback(boolean syncing) { this.syncingKnockback = syncing; }
     @Override public boolean isSyncingGroupTeleport() { return this.syncingGroupTeleport; }
@@ -364,6 +376,8 @@ public final class HiveMindCoordinator implements HiveMindContext {
     @Override public boolean isClosingDeathContainer() { return this.closingDeathContainer; }
     @Override public void setClosingDeathContainer(boolean closing) { this.closingDeathContainer = closing; }
     @Override public List<Mob> activeMobSoundSources() { return this.activeMobSoundSources.get(); }
+    @Override public List<Boolean> itemBreakHandledStack() { return this.itemBreakHandledStack.get(); }
+    @Override public Map<UUID, Long> lastCaveSoundGameTimes() { return this.lastCaveSoundGameTimes; }
 
     @Override public TeamLifecycleService teamLifecycle() { return this.teamLifecycleService; }
     @Override public InventoryAndAmmoService inventoryAndAmmo() { return this.inventoryAndAmmoService; }

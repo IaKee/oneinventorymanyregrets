@@ -33,6 +33,7 @@ public final class OIMRConfig {
     public static final String KEY_SHARED_MOB_SOUNDS = "sharedMobSounds";
     public static final String KEY_SHARED_MOB_SOUND_FILTER = "sharedMobSoundFilter";
     public static final String KEY_SHARED_MOB_SOUND_VOLUME = "sharedMobSoundVolume";
+    public static final String KEY_SHARED_CAVE_SOUNDS = "sharedCaveSounds";
     public static final String KEY_LAVA_DAMAGE_MODE = "lavaDamageMode";
     public static final String KEY_UNDERWATER_BREATH_MODE = "underwaterBreathMode";
     public static final String KEY_DOT_DAMAGE_MODE = "dotDamageMode";
@@ -45,6 +46,7 @@ public final class OIMRConfig {
     private static final String KEY_XP_WEIGHT = "xpWeight";
     private static final String KEY_AFFINITY = "affinity";
     public static final String KEY_SYNC_EFFECTS = "syncEffects";
+    public static final String KEY_SYNC_ADVANCEMENTS = "syncAdvancements";
     public static final String KEY_SYNC_HOTBAR = "syncHotbar";
     public static final String KEY_SYNC_HELMET = "syncHelmet";
     public static final String KEY_SYNC_CHESTPLATE = "syncChestplate";
@@ -190,6 +192,7 @@ public final class OIMRConfig {
         boolean sharedMobSounds,
         MobSoundFilter sharedMobSoundFilter,
         int sharedMobSoundVolume,
+        boolean sharedCaveSounds,
         MultiMemberScalingMode lavaDamageMode,
         MultiMemberScalingMode underwaterBreathMode,
         MultiMemberScalingMode dotDamageMode,
@@ -204,6 +207,7 @@ public final class OIMRConfig {
         boolean invalidAffinityResetPending,
         boolean resaveNeeded,
         boolean syncEffects,
+        boolean syncAdvancements,
         boolean syncHotbar,
         boolean syncHelmet,
         boolean syncChestplate,
@@ -221,6 +225,7 @@ public final class OIMRConfig {
                 true,
                 MobSoundFilter.ALL,
                 MAX_SHARED_MOB_SOUND_VOLUME,
+                true,
                 MultiMemberScalingMode.CAP_1X,
                 MultiMemberScalingMode.CAP_1X,
                 MultiMemberScalingMode.CAP_1X,
@@ -234,6 +239,7 @@ public final class OIMRConfig {
                 MAX_AFFINITY,
                 false,
                 false,
+                true,
                 true,
                 true,
                 true,
@@ -258,6 +264,7 @@ public final class OIMRConfig {
                 MIN_SHARED_MOB_SOUND_VOLUME,
                 MAX_SHARED_MOB_SOUND_VOLUME
             );
+            boolean nextSharedCaveSounds = parseBoolean(props, KEY_SHARED_CAVE_SOUNDS, true);
             MultiMemberScalingMode nextLavaDamageMode = MultiMemberScalingMode.parseConfigValue(
                 KEY_LAVA_DAMAGE_MODE,
                 props.getProperty(KEY_LAVA_DAMAGE_MODE)
@@ -290,6 +297,7 @@ public final class OIMRConfig {
                 nextInvalidAffinityResetPending = false;
             }
             boolean nextSyncEffects = parseBoolean(props, KEY_SYNC_EFFECTS, true);
+            boolean nextSyncAdvancements = parseBoolean(props, KEY_SYNC_ADVANCEMENTS, true);
             boolean nextSyncHotbar = parseBoolean(props, KEY_SYNC_HOTBAR, true);
             boolean nextSyncHelmet = parseBoolean(props, KEY_SYNC_HELMET, true);
             boolean nextSyncChestplate = parseBoolean(props, KEY_SYNC_CHESTPLATE, true);
@@ -305,6 +313,7 @@ public final class OIMRConfig {
                 nextSharedMobSounds,
                 nextSharedMobSoundFilter,
                 nextSharedMobSoundVolume,
+                nextSharedCaveSounds,
                 nextLavaDamageMode,
                 nextUnderwaterBreathMode,
                 nextDotDamageMode,
@@ -319,6 +328,7 @@ public final class OIMRConfig {
                 nextInvalidAffinityResetPending,
                 nextResaveNeeded,
                 nextSyncEffects,
+                nextSyncAdvancements,
                 nextSyncHotbar,
                 nextSyncHelmet,
                 nextSyncChestplate,
@@ -351,6 +361,7 @@ public final class OIMRConfig {
     private static volatile boolean sharedMobSounds = true;
     private static volatile MobSoundFilter sharedMobSoundFilter = MobSoundFilter.ALL;
     private static volatile int sharedMobSoundVolume = MAX_SHARED_MOB_SOUND_VOLUME;
+    private static volatile boolean sharedCaveSounds = true;
     private static volatile MultiMemberScalingMode lavaDamageMode = MultiMemberScalingMode.CAP_1X;
     private static volatile MultiMemberScalingMode underwaterBreathMode = MultiMemberScalingMode.CAP_1X;
     private static volatile MultiMemberScalingMode dotDamageMode = MultiMemberScalingMode.CAP_1X;
@@ -364,6 +375,7 @@ public final class OIMRConfig {
     private static volatile int affinity = MAX_AFFINITY;
     private static volatile boolean invalidAffinityResetPending = false;
     private static volatile boolean syncEffects = true;
+    private static volatile boolean syncAdvancements = true;
     private static volatile boolean syncHotbar = true;
     private static volatile boolean syncHelmet = true;
     private static volatile boolean syncChestplate = true;
@@ -495,6 +507,7 @@ public final class OIMRConfig {
         sharedMobSounds = snapshot.sharedMobSounds();
         sharedMobSoundFilter = snapshot.sharedMobSoundFilter();
         sharedMobSoundVolume = snapshot.sharedMobSoundVolume();
+        sharedCaveSounds = snapshot.sharedCaveSounds();
         lavaDamageMode = snapshot.lavaDamageMode();
         underwaterBreathMode = snapshot.underwaterBreathMode();
         dotDamageMode = snapshot.dotDamageMode();
@@ -508,6 +521,7 @@ public final class OIMRConfig {
         affinity = snapshot.affinity();
         invalidAffinityResetPending = snapshot.invalidAffinityResetPending();
         syncEffects = snapshot.syncEffects();
+        syncAdvancements = snapshot.syncAdvancements();
         syncHotbar = snapshot.syncHotbar();
         syncHelmet = snapshot.syncHelmet();
         syncChestplate = snapshot.syncChestplate();
@@ -682,6 +696,7 @@ public final class OIMRConfig {
         props.setProperty(KEY_SHARED_MOB_SOUNDS, Boolean.toString(sharedMobSounds));
         props.setProperty(KEY_SHARED_MOB_SOUND_FILTER, sharedMobSoundFilter.configValue());
         props.setProperty(KEY_SHARED_MOB_SOUND_VOLUME, Integer.toString(sharedMobSoundVolume));
+        props.setProperty(KEY_SHARED_CAVE_SOUNDS, Boolean.toString(sharedCaveSounds));
         props.setProperty(KEY_LAVA_DAMAGE_MODE, lavaDamageMode.configValue());
         props.setProperty(KEY_UNDERWATER_BREATH_MODE, underwaterBreathMode.configValue());
         props.setProperty(KEY_DOT_DAMAGE_MODE, dotDamageMode.configValue());
@@ -694,6 +709,7 @@ public final class OIMRConfig {
         props.setProperty(KEY_XP_WEIGHT, Float.toString(xpWeight));
         props.setProperty(KEY_AFFINITY, Integer.toString(affinity));
         props.setProperty(KEY_SYNC_EFFECTS, Boolean.toString(syncEffects));
+        props.setProperty(KEY_SYNC_ADVANCEMENTS, Boolean.toString(syncAdvancements));
         props.setProperty(KEY_SYNC_HOTBAR, Boolean.toString(syncHotbar));
         props.setProperty(KEY_SYNC_HELMET, Boolean.toString(syncHelmet));
         props.setProperty(KEY_SYNC_CHESTPLATE, Boolean.toString(syncChestplate));
@@ -789,6 +805,18 @@ public final class OIMRConfig {
         int sanitized = sanitizePercent(percent, MIN_SHARED_MOB_SOUND_VOLUME, MAX_SHARED_MOB_SOUND_VOLUME);
         if (sharedMobSoundVolume != sanitized || !Files.exists(getConfigPath())) {
             sharedMobSoundVolume = sanitized;
+            return save();
+        }
+        return true;
+    }
+
+    public static boolean isSharedCaveSoundsEnabled() {
+        return sharedCaveSounds;
+    }
+
+    public static synchronized boolean setSharedCaveSounds(boolean enabled) {
+        if (sharedCaveSounds != enabled || !Files.exists(getConfigPath())) {
+            sharedCaveSounds = enabled;
             return save();
         }
         return true;
@@ -968,6 +996,18 @@ public final class OIMRConfig {
         return true;
     }
 
+    public static boolean isSyncAdvancementsEnabled() {
+        return syncAdvancements;
+    }
+
+    public static synchronized boolean setSyncAdvancements(boolean enabled) {
+        if (syncAdvancements != enabled || !Files.exists(getConfigPath())) {
+            syncAdvancements = enabled;
+            return save();
+        }
+        return true;
+    }
+
     public static boolean isSyncHotbarEnabled() {
         return syncHotbar;
     }
@@ -1079,12 +1119,14 @@ public final class OIMRConfig {
             case KEY_SHARED_PORTALS -> setSharedPortals(enabled);
             case KEY_UNDERWATER_MUFFLE -> setUnderwaterMuffle(enabled);
             case KEY_SHARED_MOB_SOUNDS -> setSharedMobSounds(enabled);
+            case KEY_SHARED_CAVE_SOUNDS -> setSharedCaveSounds(enabled);
             case KEY_COMUNISM -> setComunism(enabled);
             case KEY_FRIENDLY_PETS -> setFriendlyPets(enabled);
             case KEY_EXCLUDE_CREATIVE_FROM_DEATH -> setExcludeCreativeFromDeath(enabled);
             case KEY_WIPE_CREATIVE_INVENTORY_ON_DEATH -> setWipeCreativeInventoryOnDeath(enabled);
             case KEY_RANDOM_DEATH_LOOT -> setRandomDeathLoot(enabled);
             case KEY_SYNC_EFFECTS -> setSyncEffects(enabled);
+            case KEY_SYNC_ADVANCEMENTS -> setSyncAdvancements(enabled);
             case KEY_SYNC_HOTBAR -> setSyncHotbar(enabled);
             case KEY_SYNC_HELMET -> setSyncHelmet(enabled);
             case KEY_SYNC_CHESTPLATE -> setSyncChestplate(enabled);

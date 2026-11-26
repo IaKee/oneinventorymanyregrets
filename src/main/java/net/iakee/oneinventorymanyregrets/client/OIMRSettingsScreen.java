@@ -98,6 +98,18 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
             this.list.addBig(syncEffectsButton);
         }
 
+        CycleButton<Boolean> syncAdvancementsButton = CycleButton.onOffBuilder(OIMRConfig.isSyncAdvancementsEnabled())
+            .withTooltip(v -> Tooltip.create(Component.translatable("oimr.settings.sync_advancements.tooltip")))
+            .create(
+                0,
+                0,
+                310,
+                20,
+                Component.translatable("oimr.settings.sync_advancements"),
+                (button, value) -> applyBooleanSetting(OIMRConfig.KEY_SYNC_ADVANCEMENTS, value)
+            );
+        this.list.addBig(syncAdvancementsButton);
+
         // Section 2: Synced Inventory & Equipment
         this.list.addHeader(Component.translatable("oimr.settings.section.slots"));
 
@@ -291,6 +303,18 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
         this.mobSoundVolumeSlider = new MobSoundVolumeSlider(310, 20, OIMRConfig.getSharedMobSoundVolumePercent());
         this.mobSoundVolumeSlider.setTooltip(Tooltip.create(Component.translatable("oimr.settings.shared_mob_sound_volume.tooltip")));
         this.list.addBig(this.mobSoundVolumeSlider);
+
+        CycleButton<Boolean> sharedCaveSoundsButton = CycleButton.onOffBuilder(OIMRConfig.isSharedCaveSoundsEnabled())
+            .withTooltip(v -> Tooltip.create(Component.translatable("oimr.settings.shared_cave_sounds.tooltip")))
+            .create(
+                0,
+                0,
+                310,
+                20,
+                Component.translatable("oimr.settings.shared_cave_sounds"),
+                (button, value) -> applyBooleanSetting(OIMRConfig.KEY_SHARED_CAVE_SOUNDS, value)
+            );
+        this.list.addBig(sharedCaveSoundsButton);
 
         updateMobSoundControlsState(sharedMobSounds, initialMobSoundFilter);
     }

@@ -16,6 +16,7 @@ import net.iakee.oneinventorymanyregrets.hivemind.HiveServerRecipeBookAccess;
 import net.iakee.oneinventorymanyregrets.hivemind.OIMRLang;
 import net.iakee.oneinventorymanyregrets.hivemind.PersonalInventoryState;
 import net.iakee.oneinventorymanyregrets.network.OIMRNetworking;
+import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.core.NonNullList;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundSetExperiencePacket;
@@ -374,12 +375,14 @@ public final class TeamLifecycleService {
 
         ((HivePlayerProgressAccess) player).oimr$setEnchantmentSeed(hive.getEnchantmentSeed());
 
-        this.ctx.setSyncingAdvancements(true);
-        try {
-            ((HivePlayerAdvancementsAccess) player.getAdvancements())
-                .oimr$syncFromHive(this.ctx.server().getAdvancements(), hive.getAdvancements());
-        } finally {
-            this.ctx.setSyncingAdvancements(false);
+        if (OIMRConfig.isSyncAdvancementsEnabled()) {
+            this.ctx.setSyncingAdvancements(true);
+            try {
+                ((HivePlayerAdvancementsAccess) player.getAdvancements())
+                    .oimr$syncFromHive(this.ctx.server().getAdvancements(), hive.getAdvancements());
+            } finally {
+                this.ctx.setSyncingAdvancements(false);
+            }
         }
 
         this.ctx.setSyncingRecipes(true);
@@ -607,6 +610,8 @@ public final class TeamLifecycleService {
             hive.clearHazardWindows();
         }
         boolean currentSyncEffects = OIMRConfig.isSyncEffectsEnabled();
+        boolean currentSyncAdvancements = OIMRConfig.isSyncAdvancementsEnabled();
+        boolean advancementsBecameEnabled = !this.ctx.isLastAppliedSyncAdvancements() && currentSyncAdvancements;
         int currentAffinityPercent = OIMRConfig.getAffinityPercent();
         boolean affinityBecameFull = this.ctx.getLastAppliedAffinityPercent() < OIMRConfig.MAX_AFFINITY
             && OIMRConfig.isFullAffinity();
@@ -621,7 +626,38 @@ public final class TeamLifecycleService {
             this.ctx.effectSync().clearReplicatedEffectsFromAllAttached();
         }
         this.ctx.setLastAppliedSyncEffects(currentSyncEffects);
+        this.ctx.setLastAppliedSyncAdvancements(currentSyncAdvancements);
         this.ctx.setLastAppliedAffinityPercent(currentAffinityPercent);
+        if (advancementsBecameEnabled) {
+            for (String hiveId : this.ctx.getActiveHiveIds()) {
+                HiveMind hive = data.getIfPresent(hiveId);
+                if (hive == null) {
+                    continue;
+                }
+                List<ServerPlayer> online = this.ctx.getOnlineMembers(hiveId);
+                for (ServerPlayer member : online) {
+                    ((HivePlayerAdvancementsAccess) member.getAdvancements())
+                        .oimr$exportProgress()
+                        .forEach((advId, memberProg) -> {
+                            AdvancementHolder holder = this.ctx.server().getAdvancements().get(advId);
+                            if (holder != null) {
+                                for (String criterion : memberProg.getCompletedCriteria()) {
+                                    hive.grantAdvancementCriterion(holder, criterion);
+                                }
+                            }
+                        });
+                }
+                this.ctx.setSyncingAdvancements(true);
+                try {
+                    for (ServerPlayer member : online) {
+                        ((HivePlayerAdvancementsAccess) member.getAdvancements())
+                            .oimr$syncFromHive(this.ctx.server().getAdvancements(), hive.getAdvancements());
+                    }
+                } finally {
+                    this.ctx.setSyncingAdvancements(false);
+                }
+            }
+        }
         if (OIMRConfig.isFullAffinity()) {
             this.ctx.pendingDamageSources().clear();
             for (String hiveId : this.ctx.getActiveHiveIds()) {

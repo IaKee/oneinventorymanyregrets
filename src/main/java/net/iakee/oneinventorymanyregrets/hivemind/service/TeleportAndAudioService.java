@@ -3,13 +3,20 @@ package net.iakee.oneinventorymanyregrets.hivemind.service;
 import net.iakee.oneinventorymanyregrets.config.OIMRConfig;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveEntityPortalAccess;
 import net.minecraft.core.Holder;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.protocol.game.ClientboundSoundPacket;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.attribute.EnvironmentAttributes;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.portal.TeleportTransition;
 import net.minecraft.world.phys.Vec3;
@@ -17,6 +24,7 @@ import org.jspecify.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -293,5 +301,160 @@ public final class TeleportAndAudioService {
                 ));
             }
         }
+    }
+
+    public void beginItemBreakHook() {
+        this.ctx.itemBreakHandledStack().add(Boolean.FALSE);
+    }
+
+    public void onPlayerEquippedItemBroken(ServerPlayer source, ItemStack brokenItem, EquipmentSlot inSlot) {
+        List<Boolean> stack = this.ctx.itemBreakHandledStack();
+        if (!stack.isEmpty()) {
+            stack.set(stack.size() - 1, Boolean.TRUE);
+        }
+        propagateItemBreakSound(source, brokenItem, true);
+    }
+
+    public void endItemBreakHook(ServerPlayer source, ItemStack brokenItem) {
+        List<Boolean> stack = this.ctx.itemBreakHandledStack();
+        boolean handledByEntityEvent = false;
+        if (!stack.isEmpty()) {
+            handledByEntityEvent = Boolean.TRUE.equals(stack.removeLast());
+        }
+        if (!handledByEntityEvent) {
+            propagateItemBreakSound(source, brokenItem, false);
+        }
+    }
+
+    public void propagateItemBreakSound(ServerPlayer source, ItemStack brokenItem, boolean broadcastViaEntityEvent) {
+        if (!this.ctx.isAttached(source) || source.isSilent() || brokenItem.isEmpty()) {
+            return;
+        }
+        Holder<SoundEvent> breakSound = brokenItem.get(DataComponents.BREAK_SOUND);
+        if (breakSound == null) {
+            return;
+        }
+        String hiveId = this.ctx.getAttachedHiveId(source.getUUID());
+        if (hiveId == null) {
+            return;
+        }
+
+        float volume = 0.8F;
+        float pitch = 0.8F + source.getRandom().nextFloat() * 0.4F;
+        long seed = source.getRandom().nextLong();
+        float range = breakSound.value().getRange(volume);
+        double rangeSq = (double) range * (double) range;
+
+        for (ServerPlayer member : this.ctx.getOnlineMembers(hiveId)) {
+            if (member.isRemoved()
+                || member.isDeadOrDying()
+                || member.isSpectator()
+                || member.connection == null) {
+                continue;
+            }
+            if (broadcastViaEntityEvent) {
+                if (member == source) {
+                    continue;
+                }
+                if (member.level() == source.level()
+                    && member.position().distanceToSqr(source.position()) < rangeSq) {
+                    continue;
+                }
+            }
+            member.connection.send(new ClientboundSoundPacket(
+                breakSound,
+                source.getSoundSource(),
+                member.getX(),
+                member.getY(),
+                member.getZ(),
+                volume,
+                pitch,
+                seed
+            ));
+        }
+    }
+
+    public void onCaveSoundEmitted(
+        ServerPlayer source,
+        Identifier soundId,
+        double offsetX,
+        double offsetY,
+        double offsetZ,
+        long seed
+    ) {
+        if (!OIMRConfig.isSharedCaveSoundsEnabled()
+            || !this.ctx.isAttached(source)
+            || source.isRemoved()
+            || source.isDeadOrDying()
+            || source.isSpectator()) {
+            return;
+        }
+        if (!isAllowedCaveMoodSound(source, soundId)) {
+            return;
+        }
+        Optional<Holder.Reference<SoundEvent>> soundHolderOpt = BuiltInRegistries.SOUND_EVENT.get(soundId);
+        if (soundHolderOpt.isEmpty()) {
+            return;
+        }
+        String hiveId = this.ctx.getAttachedHiveId(source.getUUID());
+        if (hiveId == null) {
+            return;
+        }
+
+        long gameTime = source.level().getGameTime();
+        Long lastGameTime = this.ctx.lastCaveSoundGameTimes().get(source.getUUID());
+        if (lastGameTime != null && gameTime >= lastGameTime && (gameTime - lastGameTime) < 20L) {
+            return;
+        }
+        this.ctx.lastCaveSoundGameTimes().put(source.getUUID(), gameTime);
+
+        double dx = clampSoundOffset(offsetX);
+        double dy = clampSoundOffset(offsetY);
+        double dz = clampSoundOffset(offsetZ);
+        Holder<SoundEvent> soundHolder = soundHolderOpt.get();
+
+        for (ServerPlayer member : this.ctx.getOnlineMembers(hiveId)) {
+            if (member == source
+                || member.isRemoved()
+                || member.isDeadOrDying()
+                || member.isSpectator()
+                || member.connection == null) {
+                continue;
+            }
+            member.connection.send(new ClientboundSoundPacket(
+                soundHolder,
+                SoundSource.AMBIENT,
+                member.getX() + dx,
+                member.getEyeY() + dy,
+                member.getZ() + dz,
+                1.0F,
+                1.0F,
+                seed
+            ));
+        }
+    }
+
+    private static double clampSoundOffset(double value) {
+        if (!Double.isFinite(value)) {
+            return 0.0D;
+        }
+        return Math.max(-32.0D, Math.min(32.0D, value));
+    }
+
+    private static boolean isAllowedCaveMoodSound(ServerPlayer source, Identifier soundId) {
+        if (soundId.equals(SoundEvents.AMBIENT_CAVE.value().location())
+            || soundId.equals(SoundEvents.AMBIENT_NETHER_WASTES_MOOD.value().location())
+            || soundId.equals(SoundEvents.AMBIENT_SOUL_SAND_VALLEY_MOOD.value().location())
+            || soundId.equals(SoundEvents.AMBIENT_BASALT_DELTAS_MOOD.value().location())
+            || soundId.equals(SoundEvents.AMBIENT_CRIMSON_FOREST_MOOD.value().location())
+            || soundId.equals(SoundEvents.AMBIENT_WARPED_FOREST_MOOD.value().location())) {
+            return true;
+        }
+        return source.level()
+            .environmentAttributes()
+            .getValue(EnvironmentAttributes.AMBIENT_SOUNDS, source.position())
+            .mood()
+            .map(mood -> mood.soundEvent().value().location().equals(soundId))
+            .orElse(false);
     }
 }

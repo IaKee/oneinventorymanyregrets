@@ -33,6 +33,9 @@ public class PlayerMixin implements HiveFoodDataAccess, HivePlayerProgressAccess
     @Shadow
     protected int enchantmentSeed;
 
+    @Shadow
+    private int sleepCounter;
+
     @Override
     public void oimr$setFoodData(FoodData foodData) {
         this.foodData = foodData;
@@ -51,6 +54,11 @@ public class PlayerMixin implements HiveFoodDataAccess, HivePlayerProgressAccess
     @Override
     public void oimr$setEnchantmentSeed(int seed) {
         this.enchantmentSeed = seed;
+    }
+
+    @Override
+    public void oimr$setSleepCounter(int sleepCounter) {
+        this.sleepCounter = sleepCounter;
     }
 
     @ModifyVariable(method = "causeFoodExhaustion", at = @At("HEAD"), argsOnly = true)

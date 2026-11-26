@@ -15,6 +15,7 @@
 		"FoxMixin",
 		"InfestedMobEffectMixin",
 		"InventoryMixin",
+		"ItemStackMixin",
 		"LivingEntityMixin",
 		"MerchantMenuMixin",
 		"MobEffectInstanceMixin",
@@ -38,6 +39,7 @@
 	],
 	"client": [
 		"client.AvatarRendererMixin",
+		"client.BiomeAmbientSoundsHandlerMixin",
 		"client.FogRendererMixin",
 		"client.GuiItemRenderStateMixin",
 		"client.GuiRendererMixin",

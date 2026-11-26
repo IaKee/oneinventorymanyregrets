@@ -13,6 +13,9 @@ import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import net.iakee.oneinventorymanyregrets.effect.OIMRMobEffects;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveLivingEntityAccess;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindManager;
+import net.iakee.oneinventorymanyregrets.network.OIMRNetworking;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.Holder;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -26,8 +29,10 @@ import net.minecraft.world.effect.MobEffectInstance;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityEquipment;
+import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ExperienceOrb;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
@@ -53,6 +58,12 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
 
     @Unique
     private boolean oimr$tickingEffects = false;
+
+    @Unique
+    private boolean oimr$groundSleeping = false;
+
+    @Unique
+    private @Nullable Direction oimr$groundSleepOrientation = null;
 
     @Invoker("detectEquipmentUpdates")
     protected abstract void oimr$invokeDetectEquipmentUpdates();
@@ -93,6 +104,74 @@ public abstract class LivingEntityMixin implements HiveLivingEntityAccess {
     @Override
     public boolean oimr$checkTotemDeathProtection(DamageSource source) {
         return this.oimr$invokeCheckTotemDeathProtection(source);
+    }
+
+    @Override
+    public void oimr$setGroundSleeping(boolean groundSleeping, @Nullable Direction orientation) {
+        this.oimr$groundSleeping = groundSleeping;
+        this.oimr$groundSleepOrientation = groundSleeping ? orientation : null;
+    }
+
+    @Override
+    public boolean oimr$isGroundSleeping() {
+        return this.oimr$groundSleeping;
+    }
+
+    @Inject(method = "checkBedExists", at = @At("HEAD"), cancellable = true)
+    private void oimr$allowGroundSleepWithoutBed(CallbackInfoReturnable<Boolean> cir) {
+        if (this.oimr$groundSleeping) {
+            cir.setReturnValue(true);
+        }
+    }
+
+    @Inject(method = "setPosToBed(Lnet/minecraft/core/BlockPos;)Z", at = @At("HEAD"), cancellable = true)
+    private void oimr$keepGroundSleepPosition(BlockPos bedPosition, CallbackInfoReturnable<Boolean> cir) {
+        if (this.oimr$groundSleeping) {
+            cir.setReturnValue(true);
+        }
+    }
+
+    @Inject(method = "getBedOrientation", at = @At("HEAD"), cancellable = true)
+    private void oimr$provideGroundSleepOrientation(CallbackInfoReturnable<@Nullable Direction> cir) {
+        if (this.oimr$groundSleeping && this.oimr$groundSleepOrientation != null) {
+            cir.setReturnValue(this.oimr$groundSleepOrientation);
+        }
+    }
+
+    @Inject(method = "stopSleeping", at = @At("HEAD"))
+    private void oimr$captureGroundSleepBeforeStop(
+        CallbackInfo ci,
+        @Share("oimrWasGroundSleep") LocalBooleanRef wasGroundSleep
+    ) {
+        wasGroundSleep.set(this.oimr$groundSleeping);
+    }
+
+    @Inject(method = "stopSleeping", at = @At("RETURN"))
+    private void oimr$clearGroundSleepAfterStop(
+        CallbackInfo ci,
+        @Share("oimrWasGroundSleep") LocalBooleanRef wasGroundSleep
+    ) {
+        this.oimr$groundSleeping = false;
+        this.oimr$groundSleepOrientation = null;
+        if (wasGroundSleep.get()) {
+            LivingEntity self = (LivingEntity) (Object) this;
+            if (!self.level().isClientSide() && self instanceof ServerPlayer sp) {
+                OIMRNetworking.sendGroundSleepUpdate(sp, false, Direction.NORTH);
+                Vec3 pos = sp.position();
+                double lowerY = pos.y - 0.125D;
+                if (Math.abs((pos.y - Math.floor(pos.y)) - 0.125D) < 0.01D
+                    && sp.level().noBlockCollision(sp, sp.getDimensions(Pose.STANDING).makeBoundingBox(pos.x, lowerY, pos.z))) {
+                    sp.setPos(pos.x, lowerY, pos.z);
+                }
+            }
+        }
+    }
+
+    @Inject(method = "onEquippedItemBroken", at = @At("TAIL"))
+    private void oimr$propagateBrokenItemSound(ItemStack brokenItem, EquipmentSlot inSlot, CallbackInfo ci) {
+        if ((Object) this instanceof ServerPlayer sp) {
+            HiveMindManager.onPlayerEquippedItemBroken(sp, brokenItem, inSlot);
+        }
     }
 
     @Inject(method = "decreaseAirSupply", at = @At("HEAD"), cancellable = true)

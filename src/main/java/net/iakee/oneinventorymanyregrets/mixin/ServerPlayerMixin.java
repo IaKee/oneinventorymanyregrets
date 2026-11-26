@@ -5,19 +5,26 @@ import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Share;
 import com.llamalad7.mixinextras.sugar.ref.LocalBooleanRef;
+import com.mojang.datafixers.util.Either;
 import io.netty.channel.ChannelFutureListener;
+import net.iakee.oneinventorymanyregrets.hivemind.HiveLivingEntityAccess;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindManager;
 import net.iakee.oneinventorymanyregrets.hivemind.OIMRLang;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundPlayerCombatKillPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.server.players.PlayerList;
+import net.minecraft.util.Unit;
+import net.minecraft.world.attribute.BedRule;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.food.FoodData;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.block.AbstractBedBlock;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.scores.PlayerTeam;
 import org.jspecify.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
@@ -25,6 +32,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(ServerPlayer.class)
 public class ServerPlayerMixin {
@@ -126,6 +134,42 @@ public class ServerPlayerMixin {
     @Inject(method = "setRespawnPosition", at = @At("TAIL"))
     private void oimr$onSetRespawnPosition(ServerPlayer.RespawnConfig respawnConfig, boolean showMessage, CallbackInfo ci) {
         HiveMindManager.onRespawnPositionChanged((ServerPlayer) (Object) this, respawnConfig, showMessage);
+    }
+
+    @Inject(method = "startSleepInBed", at = @At("RETURN"))
+    private void oimr$onStartSleepInBed(
+        AbstractBedBlock bedBlock,
+        BlockState bedBlockState,
+        BedRule rule,
+        BlockPos pos,
+        CallbackInfoReturnable<Either<Player.BedSleepingProblem, Unit>> cir
+    ) {
+        if (cir.getReturnValue().right().isPresent()) {
+            HiveMindManager.onPlayerStartedSleeping((ServerPlayer) (Object) this);
+        }
+    }
+
+    @Inject(method = "stopSleepInBed", at = @At("HEAD"))
+    private void oimr$captureSleeperBeforeStop(
+        boolean forcefulWakeUp,
+        boolean updateLevelList,
+        CallbackInfo ci,
+        @Share("oimrWasSleeping") LocalBooleanRef wasSleeping
+    ) {
+        ServerPlayer self = (ServerPlayer) (Object) this;
+        wasSleeping.set(self.isSleeping());
+    }
+
+    @Inject(method = "stopSleepInBed", at = @At("RETURN"))
+    private void oimr$onStopSleepInBed(
+        boolean forcefulWakeUp,
+        boolean updateLevelList,
+        CallbackInfo ci,
+        @Share("oimrWasSleeping") LocalBooleanRef wasSleeping
+    ) {
+        if (wasSleeping.get()) {
+            HiveMindManager.onPlayerStoppedSleeping((ServerPlayer) (Object) this, forcefulWakeUp, updateLevelList);
+        }
     }
 
     @Inject(method = "showEndCredits", at = @At("TAIL"))

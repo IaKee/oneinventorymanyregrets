@@ -124,8 +124,10 @@ class OIMRConfigTest {
 
         String[] invalidConfigurations = {
             "syncHotbar=perhaps\n",
+            "syncAdvancements=perhaps\n",
             "sharedMobSoundFilter=unknown\n",
             "sharedMobSoundVolume=101\n",
+            "sharedCaveSounds=maybe\n",
             "lavaDamageMode=unknown\n",
             "underwaterBreathMode=unknown\n",
             "dotDamageMode=unknown\n",

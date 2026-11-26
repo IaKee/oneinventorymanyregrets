@@ -3,6 +3,7 @@ package net.iakee.oneinventorymanyregrets.mixin.client;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.iakee.oneinventorymanyregrets.client.ClientBondState;
+import net.iakee.oneinventorymanyregrets.client.ClientGroundSleepState;
 import net.iakee.oneinventorymanyregrets.client.OIMRTranslucentRenderStateAccess;
 import net.iakee.oneinventorymanyregrets.effect.OIMRMobEffects;
 import net.minecraft.client.model.EntityModel;
@@ -10,10 +11,12 @@ import net.minecraft.client.renderer.entity.LivingEntityRenderer;
 import net.minecraft.client.renderer.entity.state.LivingEntityRenderState;
 import net.minecraft.client.renderer.rendertype.RenderType;
 import net.minecraft.client.renderer.rendertype.RenderTypes;
+import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.ARGB;
 import net.minecraft.util.Mth;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.player.Player;
 import org.jspecify.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
@@ -41,6 +44,13 @@ public abstract class LivingEntityRendererMixin<T extends LivingEntity, S extend
             access.oimr$setTranslucent(alpha < 0.99F, alpha);
         } else {
             access.oimr$setTranslucent(false, 1.0F);
+        }
+        if (state.bedOrientation == null && entity.isSleeping()) {
+            Direction groundDir = ClientGroundSleepState.getOrientation(entity.getId());
+            if (groundDir != null) {
+                state.bedOrientation = groundDir;
+                state.eyeHeight = entity.getEyeHeight(Pose.STANDING);
+            }
         }
     }
 

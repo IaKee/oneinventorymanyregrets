@@ -4,12 +4,14 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.iakee.oneinventorymanyregrets.client.ClientBondState;
+import net.iakee.oneinventorymanyregrets.client.ClientGroundSleepState;
 import net.iakee.oneinventorymanyregrets.client.ClientHudFeedState;
 import net.iakee.oneinventorymanyregrets.client.OIMRHudOverlay;
 import net.iakee.oneinventorymanyregrets.network.OIMRAirFeedPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRBondSyncPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRDamageFeedPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRFoodFeedPayload;
+import net.iakee.oneinventorymanyregrets.network.OIMRGroundSleepPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRTranslucencySyncPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRUnderwaterSyncPayload;
 
@@ -40,9 +42,14 @@ public class OIMRClient implements ClientModInitializer {
             OIMRAirFeedPayload.TYPE,
             (payload, context) -> context.client().execute(() -> ClientHudFeedState.pushAir(payload))
         );
+        ClientPlayNetworking.registerGlobalReceiver(
+            OIMRGroundSleepPayload.TYPE,
+            (payload, context) -> context.client().execute(() -> ClientGroundSleepState.update(context.client(), payload))
+        );
         OIMRHudOverlay.register();
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             ClientBondState.reset();
+            ClientGroundSleepState.reset();
             ClientHudFeedState.reset();
         });
     }

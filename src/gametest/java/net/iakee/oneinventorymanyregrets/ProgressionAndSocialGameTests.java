@@ -596,4 +596,54 @@ public class ProgressionAndSocialGameTests {
             cleanupPlayers(server, alice, bob);
         }
     }
+
+    @GameTest
+    public void testSyncAdvancementsToggleAndLiveCatchup(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        boolean prevSyncAdvancements = OIMRConfig.isSyncAdvancementsEnabled();
+        ServerPlayer alice = spawnTestPlayer(server, level, "AdvAlice");
+        ServerPlayer bob = spawnTestPlayer(server, level, "AdvBob");
+        try {
+            AdvancementHolder mineStone = server.getAdvancements().get(Identifier.withDefaultNamespace("story/mine_stone"));
+            AdvancementHolder upgradeTools = server.getAdvancements().get(Identifier.withDefaultNamespace("story/upgrade_tools"));
+            helper.assertTrue(mineStone != null && upgradeTools != null, "Expected vanilla story advancements");
+
+            helper.assertTrue(OIMRConfig.isSyncAdvancementsEnabled(), "syncAdvancements must default to true");
+
+            // Disable advancement sync -> advancements stay per-player
+            server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "oimr settings syncAdvancements false");
+            helper.assertFalse(OIMRConfig.isSyncAdvancementsEnabled(),
+                "Command /oimr settings syncAdvancements false must disable advancement sync");
+
+            for (String criterion : mineStone.value().requirements().names()) {
+                alice.getAdvancements().award(mineStone, criterion);
+            }
+            for (String criterion : upgradeTools.value().requirements().names()) {
+                bob.getAdvancements().award(upgradeTools, criterion);
+            }
+
+            helper.assertTrue(alice.getAdvancements().getOrStartProgress(mineStone).isDone(),
+                "Alice must receive her own advancement");
+            helper.assertFalse(bob.getAdvancements().getOrStartProgress(mineStone).isDone(),
+                "Bob must NOT receive Alice's advancement while syncAdvancements is false");
+            helper.assertFalse(alice.getAdvancements().getOrStartProgress(upgradeTools).isDone(),
+                "Alice must NOT receive Bob's advancement while syncAdvancements is false");
+
+            // Re-enabling advancement sync merges and syncs existing progress across the group
+            server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "oimr settings syncAdvancements true");
+            helper.assertTrue(OIMRConfig.isSyncAdvancementsEnabled(),
+                "Command /oimr settings syncAdvancements true must re-enable advancement sync");
+            helper.assertTrue(bob.getAdvancements().getOrStartProgress(mineStone).isDone(),
+                "Re-enabling syncAdvancements must sync Alice's advancement to Bob");
+            helper.assertTrue(alice.getAdvancements().getOrStartProgress(upgradeTools).isDone(),
+                "Re-enabling syncAdvancements must sync Bob's advancement to Alice");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setSyncAdvancements(prevSyncAdvancements);
+            HiveMindManager.onConfigChanged(server);
+            cleanupPlayers(server, alice, bob);
+        }
+    }
 }

@@ -17,8 +17,10 @@ import net.iakee.oneinventorymanyregrets.hivemind.HiveServerPlayerGameModeAccess
 import net.iakee.oneinventorymanyregrets.network.DamageIconType;
 import net.iakee.oneinventorymanyregrets.network.OIMRAirFeedPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRBondSyncPayload;
+import net.iakee.oneinventorymanyregrets.network.OIMRCaveSoundPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRDamageFeedPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRFoodFeedPayload;
+import net.iakee.oneinventorymanyregrets.network.OIMRGroundSleepPayload;
 import net.iakee.oneinventorymanyregrets.network.OIMRNetworking;
 import net.iakee.oneinventorymanyregrets.network.OIMRUnderwaterSyncPayload;
 import io.netty.buffer.Unpooled;
@@ -736,5 +738,359 @@ public class TeleportAndAudioGameTests {
             OIMRConfig.setAffinityPercent(prevAffinity);
             cleanupPlayers(server, alice, bob);
         }
+    }
+
+    @GameTest
+    public void testToolBreakSoundPropagationAcrossGroupIncludingNonMainHand(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        ServerScoreboard scoreboard = server.getScoreboard();
+        PlayerTeam otherTeam = scoreboard.getPlayerTeam("breakother");
+        if (otherTeam == null) {
+            otherTeam = scoreboard.addPlayerTeam("breakother");
+        }
+        TestPlayerHandle aliceHandle = spawnTestPlayerWithChannel(server, level, "BreakAlice");
+        TestPlayerHandle bobHandle = spawnTestPlayerWithChannel(server, level, "BreakBob");
+        TestPlayerHandle carolHandle = spawnTestPlayerWithChannel(server, level, "BreakCarol");
+        ServerPlayer alice = aliceHandle.player();
+        ServerPlayer bob = bobHandle.player();
+        ServerPlayer carol = carolHandle.player();
+        try {
+            scoreboard.addPlayerToTeam(carol.getScoreboardName(), otherTeam);
+
+            // Place Bob 100 blocks away (outside vanilla entity-event range) holding a different slot
+            alice.teleportTo(0.0, 64.0, 0.0);
+            bob.teleportTo(100.0, 64.0, 0.0);
+            carol.teleportTo(100.0, 64.0, 0.0);
+            bob.getInventory().setSelectedSlot(1);
+
+            // 1. Main-hand tool breaking (Bob is NOT holding it in his main hand and is far away)
+            ItemStack pick = new ItemStack(Items.IRON_PICKAXE);
+            pick.setDamageValue(pick.getMaxDamage() - 1);
+            alice.getInventory().setSelectedSlot(0);
+            alice.getInventory().setItem(0, pick);
+            bobHandle.channel().outboundMessages().clear();
+            carolHandle.channel().outboundMessages().clear();
+            pick.hurtAndBreak(1, alice, EquipmentSlot.MAINHAND);
+
+            List<ClientboundSoundPacket> bobMainSounds = drainSoundPackets(bobHandle.channel(), SoundSource.PLAYERS);
+            List<ClientboundSoundPacket> carolMainSounds = drainSoundPackets(carolHandle.channel(), SoundSource.PLAYERS);
+            helper.assertTrue(
+                bobMainSounds.size() == 1
+                    && bobMainSounds.getFirst().getSound().value().equals(SoundEvents.ITEM_BREAK.value()),
+                "Bob must hear ITEM_BREAK when Alice breaks mainhand pickaxe even though Bob is far away & on slot 1 (got "
+                    + bobMainSounds.size() + ")"
+            );
+            helper.assertTrue(carolMainSounds.isEmpty(),
+                "Player in another team must NOT hear Alice's propagated tool break sound");
+
+            // 2. Off-hand item breaking (not in main hand for either player!)
+            ItemStack shield = new ItemStack(Items.SHIELD);
+            shield.setDamageValue(shield.getMaxDamage() - 1);
+            alice.setItemSlot(EquipmentSlot.OFFHAND, shield);
+            bobHandle.channel().outboundMessages().clear();
+            shield.hurtAndBreak(1, alice, EquipmentSlot.OFFHAND);
+
+            List<ClientboundSoundPacket> bobOffhandSounds = drainSoundPackets(bobHandle.channel(), SoundSource.PLAYERS);
+            helper.assertTrue(
+                bobOffhandSounds.size() == 1
+                    && bobOffhandSounds.getFirst().getSound().value().equals(SoundEvents.SHIELD_BREAK.value()),
+                "Bob must hear SHIELD_BREAK when Alice breaks offhand shield (got " + bobOffhandSounds.size() + ")"
+            );
+
+            // 3. Armor slot breaking
+            ItemStack helmet = new ItemStack(Items.IRON_HELMET);
+            helmet.setDamageValue(helmet.getMaxDamage() - 1);
+            alice.setItemSlot(EquipmentSlot.HEAD, helmet);
+            bobHandle.channel().outboundMessages().clear();
+            helmet.hurtAndBreak(1, alice, EquipmentSlot.HEAD);
+
+            List<ClientboundSoundPacket> bobArmorSounds = drainSoundPackets(bobHandle.channel(), SoundSource.PLAYERS);
+            helper.assertTrue(
+                bobArmorSounds.size() == 1
+                    && bobArmorSounds.getFirst().getSound().value().equals(SoundEvents.ITEM_BREAK.value()),
+                "Bob must hear ITEM_BREAK when Alice's helmet breaks (got " + bobArmorSounds.size() + ")"
+            );
+
+            // 4. Direct hurtAndBreak(amount, level, player, customLambda) without onEquippedItemBroken
+            ItemStack shears = new ItemStack(Items.SHEARS);
+            shears.setDamageValue(shears.getMaxDamage() - 1);
+            aliceHandle.channel().outboundMessages().clear();
+            bobHandle.channel().outboundMessages().clear();
+            shears.hurtAndBreak(1, level, alice, broken -> {});
+
+            List<ClientboundSoundPacket> aliceCustomSounds = drainSoundPackets(aliceHandle.channel(), SoundSource.PLAYERS);
+            List<ClientboundSoundPacket> bobCustomSounds = drainSoundPackets(bobHandle.channel(), SoundSource.PLAYERS);
+            helper.assertTrue(
+                aliceCustomSounds.size() == 1 && bobCustomSounds.size() == 1
+                    && bobCustomSounds.getFirst().getSound().value().equals(SoundEvents.ITEM_BREAK.value()),
+                "Custom hurtAndBreak lambda must propagate ITEM_BREAK to both Alice and Bob"
+            );
+
+            helper.succeed();
+        } finally {
+            cleanupPlayers(server, alice, bob, carol);
+            scoreboard.removePlayerTeam(otherTeam);
+        }
+    }
+
+    @GameTest
+    public void testSharedGroupGroundSleepWallAvoidanceAndRespawn(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        TestPlayerHandle aliceHandle = spawnTestPlayerWithChannel(server, level, "SleepAlice");
+        TestPlayerHandle bobHandle = spawnTestPlayerWithChannel(server, level, "SleepBob");
+        ServerPlayer alice = aliceHandle.player();
+        ServerPlayer bob = bobHandle.player();
+        BlockPos bedHead = helper.absolutePos(new BlockPos(2, 2, 2));
+        BlockPos bedFoot = bedHead.south();
+        BlockPos bobFloor = helper.absolutePos(new BlockPos(8, 2, 8));
+        var defaultClock = level.dimensionType().defaultClock().orElseThrow();
+        long prevTime = server.clockManager().getInstance(defaultClock).totalTicks();
+        try {
+            helper.setTime(14000L);
+            level.environmentAttributes().invalidateTickCache();
+            level.updateSkyBrightness();
+
+            // Build solid floor and bed for Alice
+            level.setBlockAndUpdate(bedHead.below(), Blocks.STONE.defaultBlockState());
+            level.setBlockAndUpdate(bedFoot.below(), Blocks.STONE.defaultBlockState());
+            level.setBlockAndUpdate(
+                bedFoot,
+                Blocks.BED.red().defaultBlockState()
+                    .setValue(net.minecraft.world.level.block.BedBlock.FACING, Direction.NORTH)
+                    .setValue(net.minecraft.world.level.block.BedBlock.PART, net.minecraft.world.level.block.state.properties.BedPart.FOOT)
+            );
+            level.setBlockAndUpdate(
+                bedHead,
+                Blocks.BED.red().defaultBlockState()
+                    .setValue(net.minecraft.world.level.block.BedBlock.FACING, Direction.NORTH)
+                    .setValue(net.minecraft.world.level.block.BedBlock.PART, net.minecraft.world.level.block.state.properties.BedPart.HEAD)
+            );
+
+            // Build floor for Bob + walls on North, South, and West so only East is open for his feet!
+            for (int dx = -1; dx <= 2; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    level.setBlockAndUpdate(bobFloor.offset(dx, -1, dz), Blocks.STONE.defaultBlockState());
+                    level.setBlockAndUpdate(bobFloor.offset(dx, 0, dz), Blocks.AIR.defaultBlockState());
+                    level.setBlockAndUpdate(bobFloor.offset(dx, 1, dz), Blocks.AIR.defaultBlockState());
+                }
+            }
+            level.setBlockAndUpdate(bobFloor.north(), Blocks.STONE.defaultBlockState());
+            level.setBlockAndUpdate(bobFloor.south(), Blocks.STONE.defaultBlockState());
+            level.setBlockAndUpdate(bobFloor.west(), Blocks.STONE.defaultBlockState());
+
+            alice.teleportTo(bedHead.getX() + 0.5, bedHead.getY() + 0.5625, bedHead.getZ() + 0.5);
+            bob.teleportTo(bobFloor.getX() + 0.5, bobFloor.getY(), bobFloor.getZ() + 0.5);
+            bob.setOnGround(true);
+            // Bob is facing East; if he stretched backward (West), his feet would end up in the West wall!
+            bob.setYRot(-90.0F);
+
+            var hit = new BlockHitResult(Vec3.atCenterOf(bedHead), Direction.UP, bedHead, false);
+            level.getBlockState(bedHead).useWithoutItem(level, alice, hit);
+
+            helper.assertTrue(alice.isSleeping(), "Alice must be sleeping in the bed");
+            helper.assertTrue(bob.isSleeping(), "Bob must automatically sleep on the ground when Alice sleeps");
+            helper.assertTrue(bob.getPose() == net.minecraft.world.entity.Pose.SLEEPING,
+                "Bob must enter Pose.SLEEPING");
+            helper.assertTrue(((HiveLivingEntityAccess) bob).oimr$isGroundSleeping(),
+                "Bob must be flagged as ground sleeping");
+            helper.assertTrue(bob.getBedOrientation() == Direction.WEST,
+                "Bob's ground sleep orientation must point head West so feet extend East away from walls, got "
+                    + bob.getBedOrientation());
+
+            // Verify respawn point remains on Alice's bed, NOT Bob's ground position
+            ServerPlayer.RespawnConfig aliceRespawn = alice.getRespawnConfig();
+            ServerPlayer.RespawnConfig bobRespawn = bob.getRespawnConfig();
+            helper.assertTrue(
+                aliceRespawn != null && aliceRespawn.respawnData().pos().equals(bedHead)
+                    && bobRespawn != null && bobRespawn.respawnData().pos().equals(bedHead),
+                "Group respawn point must remain set to Alice's original bed (" + bedHead + "), got bob="
+                    + (bobRespawn != null ? bobRespawn.respawnData().pos() : null)
+            );
+
+            // Verify Bob stays asleep when ticked (checkBedExists doesn't kick ground sleepers out)
+            bob.tick();
+            helper.assertTrue(bob.isSleeping(), "Bob must remain asleep on the ground across ticks");
+
+            // Any member (including ground-sleeping Bob) cancelling sleep wakes everyone and sends chat notice
+            aliceHandle.channel().outboundMessages().clear();
+            bobHandle.channel().outboundMessages().clear();
+            bob.stopSleepInBed(false, true);
+            helper.assertFalse(bob.isSleeping(), "Bob must wake up");
+            helper.assertFalse(alice.isSleeping(), "Alice must also wake up when Bob cancels sleep");
+            helper.assertFalse(((HiveLivingEntityAccess) bob).oimr$isGroundSleeping(),
+                "Bob's ground sleeping flag must clear after waking up");
+
+            String aliceChat = drainLastSystemChat(aliceHandle.channel());
+            String bobChat = drainLastSystemChat(bobHandle.channel());
+            helper.assertTrue(
+                aliceChat != null && aliceChat.contains("SleepAlice") && aliceChat.contains("SleepBob"),
+                "Alice must receive wake-up reason chat mentioning SleepAlice and SleepBob, got: " + aliceChat
+            );
+            helper.assertTrue(
+                bobChat != null && bobChat.contains("SleepAlice") && bobChat.contains("SleepBob"),
+                "Bob must also receive wake-up reason chat mentioning SleepAlice and SleepBob, got: " + bobChat
+            );
+
+            // Re-sleep, then taking damage wakes Bob AND cancels sleep for Alice too
+            level.getBlockState(bedHead).useWithoutItem(level, alice, hit);
+            helper.assertTrue(alice.isSleeping() && bob.isSleeping(), "Both must sleep again before damage test");
+            aliceHandle.channel().outboundMessages().clear();
+            bob.hurtServer(level, level.damageSources().generic(), 2.0F);
+            helper.assertFalse(bob.isSleeping(), "Damage must wake Bob up");
+            helper.assertFalse(alice.isSleeping(), "Damage waking Bob must also wake Alice up");
+            String damageWakeChat = drainLastSystemChat(aliceHandle.channel());
+            helper.assertTrue(
+                damageWakeChat != null && damageWakeChat.contains("SleepAlice") && damageWakeChat.contains("SleepBob"),
+                "Damage wake-up must notify Alice in chat, got: " + damageWakeChat
+            );
+
+            helper.succeed();
+        } finally {
+            if (alice.isSleeping()) {
+                alice.stopSleepInBed(true, false);
+            }
+            if (bob.isSleeping()) {
+                bob.stopSleepInBed(true, false);
+            }
+            level.setBlockAndUpdate(bedHead, Blocks.AIR.defaultBlockState());
+            level.setBlockAndUpdate(bedFoot, Blocks.AIR.defaultBlockState());
+            level.setBlockAndUpdate(bedHead.below(), Blocks.AIR.defaultBlockState());
+            level.setBlockAndUpdate(bedFoot.below(), Blocks.AIR.defaultBlockState());
+            for (int dx = -1; dx <= 2; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    level.setBlockAndUpdate(bobFloor.offset(dx, 0, dz), Blocks.AIR.defaultBlockState());
+                    level.setBlockAndUpdate(bobFloor.offset(dx, 1, dz), Blocks.AIR.defaultBlockState());
+                    level.setBlockAndUpdate(bobFloor.offset(dx, -1, dz), Blocks.AIR.defaultBlockState());
+                }
+            }
+            helper.setTime(prevTime);
+            level.environmentAttributes().invalidateTickCache();
+            level.updateSkyBrightness();
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testCaveSoundPropagationAndToggle(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        boolean prevCaveSounds = OIMRConfig.isSharedCaveSoundsEnabled();
+        ServerScoreboard scoreboard = server.getScoreboard();
+        PlayerTeam otherTeam = scoreboard.getPlayerTeam("caveother");
+        if (otherTeam == null) {
+            otherTeam = scoreboard.addPlayerTeam("caveother");
+        }
+        TestPlayerHandle aliceHandle = spawnTestPlayerWithChannel(server, level, "CaveAlice");
+        TestPlayerHandle bobHandle = spawnTestPlayerWithChannel(server, level, "CaveBob");
+        TestPlayerHandle carolHandle = spawnTestPlayerWithChannel(server, level, "CaveCarol");
+        ServerPlayer alice = aliceHandle.player();
+        ServerPlayer bob = bobHandle.player();
+        ServerPlayer carol = carolHandle.player();
+        try {
+            scoreboard.addPlayerToTeam(carol.getScoreboardName(), otherTeam);
+
+            // Codec round-trips for OIMRCaveSoundPayload and OIMRGroundSleepPayload
+            OIMRCaveSoundPayload caveSample = new OIMRCaveSoundPayload(
+                SoundEvents.AMBIENT_CAVE.value().location(), 2.5D, -1.0D, 3.0D, 987654L
+            );
+            FriendlyByteBuf caveBuf = new FriendlyByteBuf(Unpooled.buffer());
+            OIMRCaveSoundPayload.STREAM_CODEC.encode(caveBuf, caveSample);
+            OIMRCaveSoundPayload caveDecoded = OIMRCaveSoundPayload.STREAM_CODEC.decode(caveBuf);
+            helper.assertTrue(
+                caveDecoded.soundId().equals(SoundEvents.AMBIENT_CAVE.value().location())
+                    && Math.abs(caveDecoded.offsetX() - 2.5D) < 1.0E-6D
+                    && caveDecoded.seed() == 987654L,
+                "OIMRCaveSoundPayload must round-trip cleanly"
+            );
+
+            OIMRGroundSleepPayload sleepSample = new OIMRGroundSleepPayload(42, true, Direction.EAST);
+            FriendlyByteBuf sleepBuf = new FriendlyByteBuf(Unpooled.buffer());
+            OIMRGroundSleepPayload.STREAM_CODEC.encode(sleepBuf, sleepSample);
+            OIMRGroundSleepPayload sleepDecoded = OIMRGroundSleepPayload.STREAM_CODEC.decode(sleepBuf);
+            helper.assertTrue(
+                sleepDecoded.entityId() == 42 && sleepDecoded.groundSleeping() && sleepDecoded.orientation() == Direction.EAST,
+                "OIMRGroundSleepPayload must round-trip cleanly"
+            );
+
+            OIMRConfig.setSharedCaveSounds(true);
+            alice.teleportTo(0.0, 64.0, 0.0);
+            bob.teleportTo(120.0, 70.0, -40.0);
+            carol.teleportTo(10.0, 64.0, 10.0);
+
+            aliceHandle.channel().outboundMessages().clear();
+            bobHandle.channel().outboundMessages().clear();
+            carolHandle.channel().outboundMessages().clear();
+
+            HiveMindManager.onCaveSoundEmitted(
+                alice,
+                SoundEvents.AMBIENT_CAVE.value().location(),
+                2.0D,
+                1.0D,
+                -3.0D,
+                54321L
+            );
+
+            List<ClientboundSoundPacket> aliceAmbient = drainSoundPackets(aliceHandle.channel(), SoundSource.AMBIENT);
+            List<ClientboundSoundPacket> bobAmbient = drainSoundPackets(bobHandle.channel(), SoundSource.AMBIENT);
+            List<ClientboundSoundPacket> carolAmbient = drainSoundPackets(carolHandle.channel(), SoundSource.AMBIENT);
+            helper.assertTrue(aliceAmbient.isEmpty(), "Source player must not receive duplicate propagated cave sound");
+            helper.assertTrue(carolAmbient.isEmpty(), "Player on another team must not receive propagated cave sound");
+            helper.assertTrue(bobAmbient.size() == 1, "Bob must receive propagated cave sound (got " + bobAmbient.size() + ")");
+            ClientboundSoundPacket packet = bobAmbient.getFirst();
+            helper.assertTrue(
+                packet.getSound().value().equals(SoundEvents.AMBIENT_CAVE.value())
+                    && Math.abs(packet.getX() - (bob.getX() + 2.0D)) < 0.15D
+                    && Math.abs(packet.getY() - (bob.getEyeY() + 1.0D)) < 0.15D
+                    && Math.abs(packet.getZ() - (bob.getZ() - 3.0D)) < 0.15D
+                    && packet.getSeed() == 54321L,
+                "Propagated cave sound must play AMBIENT_CAVE relative to Bob with matching seed"
+            );
+
+            // Toggle OFF via command -> no cave sound propagation
+            server.getCommands().performPrefixedCommand(server.createCommandSourceStack(), "oimr settings sharedCaveSounds false");
+            helper.assertFalse(OIMRConfig.isSharedCaveSoundsEnabled(),
+                "Command /oimr settings sharedCaveSounds false must update config");
+            bobHandle.channel().outboundMessages().clear();
+            HiveMindManager.onCaveSoundEmitted(
+                alice,
+                SoundEvents.AMBIENT_CAVE.value().location(),
+                1.0D,
+                0.0D,
+                1.0D,
+                11111L
+            );
+            helper.assertTrue(drainSoundPackets(bobHandle.channel(), SoundSource.AMBIENT).isEmpty(),
+                "When sharedCaveSounds is OFF, Bob must receive 0 cave sound packets");
+
+            helper.succeed();
+        } finally {
+            OIMRConfig.setSharedCaveSounds(prevCaveSounds);
+            cleanupPlayers(server, alice, bob, carol);
+            scoreboard.removePlayerTeam(otherTeam);
+        }
+    }
+
+    private static List<ClientboundSoundPacket> drainSoundPackets(EmbeddedChannel channel, SoundSource source) {
+        List<ClientboundSoundPacket> matches = new java.util.ArrayList<>();
+        Object msg;
+        while ((msg = channel.outboundMessages().poll()) != null) {
+            if (msg instanceof ClientboundSoundPacket sp && sp.getSource() == source) {
+                matches.add(sp);
+            }
+        }
+        return matches;
+    }
+
+    private static String drainLastSystemChat(EmbeddedChannel channel) {
+        String last = null;
+        Object msg;
+        while ((msg = channel.outboundMessages().poll()) != null) {
+            if (msg instanceof net.minecraft.network.protocol.game.ClientboundSystemChatPacket chat && !chat.overlay()) {
+                last = chat.content().getString();
+            }
+        }
+        return last;
     }
 }

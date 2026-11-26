@@ -4,6 +4,7 @@ import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.iakee.oneinventorymanyregrets.hivemind.HiveMindManager;
+import net.minecraft.core.Direction;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
@@ -35,6 +36,19 @@ public final class OIMRNetworking {
         PayloadTypeRegistry.clientboundPlay().register(OIMRDamageFeedPayload.TYPE, OIMRDamageFeedPayload.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(OIMRFoodFeedPayload.TYPE, OIMRFoodFeedPayload.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(OIMRAirFeedPayload.TYPE, OIMRAirFeedPayload.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(OIMRGroundSleepPayload.TYPE, OIMRGroundSleepPayload.STREAM_CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(OIMRCaveSoundPayload.TYPE, OIMRCaveSoundPayload.STREAM_CODEC);
+        ServerPlayNetworking.registerGlobalReceiver(
+            OIMRCaveSoundPayload.TYPE,
+            (payload, context) -> context.server().execute(() -> HiveMindManager.onCaveSoundEmitted(
+                context.player(),
+                payload.soundId(),
+                payload.offsetX(),
+                payload.offsetY(),
+                payload.offsetZ(),
+                payload.seed()
+            ))
+        );
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             syncToPlayer(handler.player);
             HiveMindManager.syncUnderwaterOnJoin(handler.player);
@@ -69,6 +83,15 @@ public final class OIMRNetworking {
     public static void syncUnderwaterToPlayer(ServerPlayer player, boolean hiveUnderwater) {
         if (player.connection != null && ServerPlayNetworking.canSend(player, OIMRUnderwaterSyncPayload.TYPE)) {
             ServerPlayNetworking.send(player, OIMRUnderwaterSyncPayload.fromState(hiveUnderwater));
+        }
+    }
+
+    public static void sendGroundSleepUpdate(ServerPlayer sleeper, boolean groundSleeping, Direction orientation) {
+        OIMRGroundSleepPayload payload = new OIMRGroundSleepPayload(sleeper.getId(), groundSleeping, orientation);
+        for (ServerPlayer viewer : sleeper.level().players()) {
+            if (viewer.connection != null && ServerPlayNetworking.canSend(viewer, OIMRGroundSleepPayload.TYPE)) {
+                ServerPlayNetworking.send(viewer, payload);
+            }
         }
     }
 
