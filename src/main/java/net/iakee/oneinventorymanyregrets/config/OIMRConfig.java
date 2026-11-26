@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -104,6 +105,19 @@ public final class OIMRConfig {
             }
             return ALL;
         }
+
+        private static MobSoundFilter parseConfigValue(String raw) {
+            if (raw == null) {
+                return ALL;
+            }
+            String normalized = raw.trim().toLowerCase(java.util.Locale.ROOT);
+            for (MobSoundFilter value : values()) {
+                if (value.configValue.equals(normalized)) {
+                    return value;
+                }
+            }
+            throw new IllegalArgumentException("Invalid " + KEY_SHARED_MOB_SOUND_FILTER + ": " + raw);
+        }
     }
 
     public enum MultiMemberScalingMode {
@@ -140,11 +154,24 @@ public final class OIMRConfig {
                 default -> CAP_1X;
             };
         }
+
+        private static MultiMemberScalingMode parseConfigValue(String key, String raw) {
+            if (raw == null) {
+                return CAP_1X;
+            }
+            String normalized = raw.trim().toLowerCase(java.util.Locale.ROOT);
+            return switch (normalized) {
+                case "1x", "cap_1x", "capped", "true" -> CAP_1X;
+                case "nx", "multiplicative", "multi", "unbounded", "false" -> MULTIPLICATIVE;
+                default -> throw new IllegalArgumentException("Invalid " + key + ": " + raw);
+            };
+        }
     }
 
     public enum ReloadStatus {
         LOADED,
         CREATED_DEFAULTS,
+        FAILED_APPLIED_NOT_PERSISTED,
         FAILED_USING_DEFAULTS,
         FAILED_KEPT_PREVIOUS
     }
@@ -224,16 +251,25 @@ public final class OIMRConfig {
             boolean nextSharedPortals = parseBoolean(props, KEY_SHARED_PORTALS, true);
             boolean nextUnderwaterMuffle = parseBoolean(props, KEY_UNDERWATER_MUFFLE, true);
             boolean nextSharedMobSounds = parseBoolean(props, KEY_SHARED_MOB_SOUNDS, true);
-            MobSoundFilter nextSharedMobSoundFilter = MobSoundFilter.fromString(props.getProperty(KEY_SHARED_MOB_SOUND_FILTER));
+            MobSoundFilter nextSharedMobSoundFilter = MobSoundFilter.parseConfigValue(props.getProperty(KEY_SHARED_MOB_SOUND_FILTER));
             int nextSharedMobSoundVolume = parsePercent(
                 props.getProperty(KEY_SHARED_MOB_SOUND_VOLUME),
                 MAX_SHARED_MOB_SOUND_VOLUME,
                 MIN_SHARED_MOB_SOUND_VOLUME,
                 MAX_SHARED_MOB_SOUND_VOLUME
             );
-            MultiMemberScalingMode nextLavaDamageMode = MultiMemberScalingMode.fromString(props.getProperty(KEY_LAVA_DAMAGE_MODE));
-            MultiMemberScalingMode nextUnderwaterBreathMode = MultiMemberScalingMode.fromString(props.getProperty(KEY_UNDERWATER_BREATH_MODE));
-            MultiMemberScalingMode nextDotDamageMode = MultiMemberScalingMode.fromString(props.getProperty(KEY_DOT_DAMAGE_MODE));
+            MultiMemberScalingMode nextLavaDamageMode = MultiMemberScalingMode.parseConfigValue(
+                KEY_LAVA_DAMAGE_MODE,
+                props.getProperty(KEY_LAVA_DAMAGE_MODE)
+            );
+            MultiMemberScalingMode nextUnderwaterBreathMode = MultiMemberScalingMode.parseConfigValue(
+                KEY_UNDERWATER_BREATH_MODE,
+                props.getProperty(KEY_UNDERWATER_BREATH_MODE)
+            );
+            MultiMemberScalingMode nextDotDamageMode = MultiMemberScalingMode.parseConfigValue(
+                KEY_DOT_DAMAGE_MODE,
+                props.getProperty(KEY_DOT_DAMAGE_MODE)
+            );
             boolean nextComunism = parseBoolean(props, KEY_COMUNISM, false);
             boolean nextFriendlyPets = parseBoolean(props, KEY_FRIENDLY_PETS, true);
             boolean nextExcludeCreative = parseBoolean(props, KEY_EXCLUDE_CREATIVE_FROM_DEATH, true);
@@ -307,6 +343,7 @@ public final class OIMRConfig {
     }
 
     private static volatile boolean loadedOnce = false;
+    private static volatile @Nullable String lastSaveErrorMessage = null;
     private static volatile boolean sharedKnockback = true;
     private static volatile boolean sharedEnderPearl = true;
     private static volatile boolean sharedPortals = true;
@@ -417,7 +454,9 @@ public final class OIMRConfig {
             }
             applySnapshot(defaults);
             loadedOnce = true;
-            saveToPath(path);
+            if (!saveToPath(path)) {
+                return new ReloadResult(ReloadStatus.FAILED_APPLIED_NOT_PERSISTED, lastSaveErrorMessage);
+            }
             return new ReloadResult(ReloadStatus.CREATED_DEFAULTS, null);
         }
 
@@ -442,8 +481,8 @@ public final class OIMRConfig {
         }
         applySnapshot(parsed);
         loadedOnce = true;
-        if (parsed.resaveNeeded()) {
-            saveToPath(path);
+        if (parsed.resaveNeeded() && !saveToPath(path)) {
+            return new ReloadResult(ReloadStatus.FAILED_APPLIED_NOT_PERSISTED, lastSaveErrorMessage);
         }
         return new ReloadResult(ReloadStatus.LOADED, null);
     }
@@ -482,9 +521,9 @@ public final class OIMRConfig {
         applySnapshot(ConfigSnapshot.defaults());
     }
 
-    public static synchronized void resetToDefaults() {
+    public static synchronized boolean resetToDefaults() {
         applyDefaults();
-        save();
+        return save();
     }
 
     public static synchronized void resetLoadedStateForTests() {
@@ -498,17 +537,24 @@ public final class OIMRConfig {
             return defaultValue;
         }
         String trimmed = raw.trim();
-        if (defaultValue) {
-            return !"false".equalsIgnoreCase(trimmed);
+        if ("true".equalsIgnoreCase(trimmed)) {
+            return true;
         }
-        return "true".equalsIgnoreCase(trimmed);
+        if ("false".equalsIgnoreCase(trimmed)) {
+            return false;
+        }
+        throw new IllegalArgumentException("Invalid boolean for " + key + ": " + raw);
     }
 
     private static float parseWeight(String raw, float min, float max) {
         try {
-            return sanitizeWeight(Float.parseFloat(raw.trim()), min, max);
-        } catch (NumberFormatException ignored) {
-            return 1.0F;
+            float parsed = Float.parseFloat(raw.trim());
+            if (!Float.isFinite(parsed) || parsed < min || parsed > max) {
+                throw new IllegalArgumentException("Weight out of range " + min + ".." + max + ": " + raw);
+            }
+            return parsed;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid weight: " + raw, e);
         }
     }
 
@@ -544,9 +590,13 @@ public final class OIMRConfig {
             return defaultValue;
         }
         try {
-            return sanitizePercent((int) Math.round(Double.parseDouble(raw.trim())), min, max);
-        } catch (NumberFormatException ignored) {
-            return defaultValue;
+            double parsed = Double.parseDouble(raw.trim());
+            if (!Double.isFinite(parsed) || parsed < min || parsed > max) {
+                throw new IllegalArgumentException("Percentage out of range " + min + ".." + max + ": " + raw);
+            }
+            return (int) Math.round(parsed);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid percentage: " + raw, e);
         }
     }
 
@@ -560,14 +610,19 @@ public final class OIMRConfig {
         return pending;
     }
 
-    public static synchronized void save() {
-        saveToPath(getConfigPath());
+    public static synchronized boolean save() {
+        return saveToPath(getConfigPath());
+    }
+
+    public static @Nullable String getLastSaveErrorMessage() {
+        return lastSaveErrorMessage;
     }
 
     public static synchronized boolean saveToPath(Path path) {
         Path normalized = path.toAbsolutePath();
         Path parent = normalized.getParent();
         Path tempFile = null;
+        lastSaveErrorMessage = null;
         try {
             if (parent != null) {
                 Files.createDirectories(parent);
@@ -595,11 +650,17 @@ public final class OIMRConfig {
 
             try {
                 Files.move(tempFile, normalized, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            } catch (AtomicMoveNotSupportedException ignored) {
-                Files.move(tempFile, normalized, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException | AccessDeniedException atomicFailure) {
+                try {
+                    Files.move(tempFile, normalized, StandardCopyOption.REPLACE_EXISTING);
+                } catch (IOException fallbackFailure) {
+                    fallbackFailure.addSuppressed(atomicFailure);
+                    throw fallbackFailure;
+                }
             }
             return true;
         } catch (IOException e) {
+            lastSaveErrorMessage = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             OIMRMod.LOGGER.warn("Failed to save config at {}", normalized, e);
             return false;
         } finally {
@@ -647,67 +708,73 @@ public final class OIMRConfig {
         return sharedKnockback;
     }
 
-    public static synchronized void setSharedKnockback(boolean enabled) {
+    public static synchronized boolean setSharedKnockback(boolean enabled) {
         if (sharedKnockback != enabled || !Files.exists(getConfigPath())) {
             sharedKnockback = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isSharedEnderPearlEnabled() {
         return sharedEnderPearl;
     }
 
-    public static synchronized void setSharedEnderPearl(boolean enabled) {
+    public static synchronized boolean setSharedEnderPearl(boolean enabled) {
         if (sharedEnderPearl != enabled || !Files.exists(getConfigPath())) {
             sharedEnderPearl = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isSharedPortalsEnabled() {
         return sharedPortals;
     }
 
-    public static synchronized void setSharedPortals(boolean enabled) {
+    public static synchronized boolean setSharedPortals(boolean enabled) {
         if (sharedPortals != enabled || !Files.exists(getConfigPath())) {
             sharedPortals = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isUnderwaterMuffleEnabled() {
         return underwaterMuffle;
     }
 
-    public static synchronized void setUnderwaterMuffle(boolean enabled) {
+    public static synchronized boolean setUnderwaterMuffle(boolean enabled) {
         if (underwaterMuffle != enabled || !Files.exists(getConfigPath())) {
             underwaterMuffle = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isSharedMobSoundsEnabled() {
         return sharedMobSounds;
     }
 
-    public static synchronized void setSharedMobSounds(boolean enabled) {
+    public static synchronized boolean setSharedMobSounds(boolean enabled) {
         if (sharedMobSounds != enabled || !Files.exists(getConfigPath())) {
             sharedMobSounds = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static MobSoundFilter getSharedMobSoundFilter() {
         return sharedMobSoundFilter;
     }
 
-    public static synchronized void setSharedMobSoundFilter(MobSoundFilter filter) {
+    public static synchronized boolean setSharedMobSoundFilter(MobSoundFilter filter) {
         MobSoundFilter sanitized = filter != null ? filter : MobSoundFilter.ALL;
         if (sharedMobSoundFilter != sanitized || !Files.exists(getConfigPath())) {
             sharedMobSoundFilter = sanitized;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static int getSharedMobSoundVolumePercent() {
@@ -718,12 +785,13 @@ public final class OIMRConfig {
         return sharedMobSoundVolume / 100.0F;
     }
 
-    public static synchronized void setSharedMobSoundVolumePercent(int percent) {
+    public static synchronized boolean setSharedMobSoundVolumePercent(int percent) {
         int sanitized = sanitizePercent(percent, MIN_SHARED_MOB_SOUND_VOLUME, MAX_SHARED_MOB_SOUND_VOLUME);
         if (sharedMobSoundVolume != sanitized || !Files.exists(getConfigPath())) {
             sharedMobSoundVolume = sanitized;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static MultiMemberScalingMode getLavaDamageMode() {
@@ -734,12 +802,13 @@ public final class OIMRConfig {
         return lavaDamageMode.isCapped1x();
     }
 
-    public static synchronized void setLavaDamageMode(MultiMemberScalingMode mode) {
+    public static synchronized boolean setLavaDamageMode(MultiMemberScalingMode mode) {
         MultiMemberScalingMode sanitized = mode != null ? mode : MultiMemberScalingMode.CAP_1X;
         if (lavaDamageMode != sanitized || !Files.exists(getConfigPath())) {
             lavaDamageMode = sanitized;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static MultiMemberScalingMode getUnderwaterBreathMode() {
@@ -750,12 +819,13 @@ public final class OIMRConfig {
         return underwaterBreathMode.isCapped1x();
     }
 
-    public static synchronized void setUnderwaterBreathMode(MultiMemberScalingMode mode) {
+    public static synchronized boolean setUnderwaterBreathMode(MultiMemberScalingMode mode) {
         MultiMemberScalingMode sanitized = mode != null ? mode : MultiMemberScalingMode.CAP_1X;
         if (underwaterBreathMode != sanitized || !Files.exists(getConfigPath())) {
             underwaterBreathMode = sanitized;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static MultiMemberScalingMode getDotDamageMode() {
@@ -766,91 +836,99 @@ public final class OIMRConfig {
         return dotDamageMode.isCapped1x();
     }
 
-    public static synchronized void setDotDamageMode(MultiMemberScalingMode mode) {
+    public static synchronized boolean setDotDamageMode(MultiMemberScalingMode mode) {
         MultiMemberScalingMode sanitized = mode != null ? mode : MultiMemberScalingMode.CAP_1X;
         if (dotDamageMode != sanitized || !Files.exists(getConfigPath())) {
             dotDamageMode = sanitized;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isComunismEnabled() {
         return comunism;
     }
 
-    public static synchronized void setComunism(boolean enabled) {
+    public static synchronized boolean setComunism(boolean enabled) {
         if (comunism != enabled || !Files.exists(getConfigPath())) {
             comunism = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isFriendlyPetsEnabled() {
         return friendlyPets;
     }
 
-    public static synchronized void setFriendlyPets(boolean enabled) {
+    public static synchronized boolean setFriendlyPets(boolean enabled) {
         if (friendlyPets != enabled || !Files.exists(getConfigPath())) {
             friendlyPets = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isExcludeCreativeFromDeathEnabled() {
         return excludeCreativeFromDeath;
     }
 
-    public static synchronized void setExcludeCreativeFromDeath(boolean enabled) {
+    public static synchronized boolean setExcludeCreativeFromDeath(boolean enabled) {
         if (excludeCreativeFromDeath != enabled || !Files.exists(getConfigPath())) {
             excludeCreativeFromDeath = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isWipeCreativeInventoryOnDeathEnabled() {
         return wipeCreativeInventoryOnDeath;
     }
 
-    public static synchronized void setWipeCreativeInventoryOnDeath(boolean enabled) {
+    public static synchronized boolean setWipeCreativeInventoryOnDeath(boolean enabled) {
         if (wipeCreativeInventoryOnDeath != enabled || !Files.exists(getConfigPath())) {
             wipeCreativeInventoryOnDeath = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isRandomDeathLootEnabled() {
         return randomDeathLoot;
     }
 
-    public static synchronized void setRandomDeathLoot(boolean enabled) {
+    public static synchronized boolean setRandomDeathLoot(boolean enabled) {
         if (randomDeathLoot != enabled || !Files.exists(getConfigPath())) {
             randomDeathLoot = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static float getHungerWeight() {
         return hungerWeight;
     }
 
-    public static synchronized void setHungerWeight(float weight) {
+    public static synchronized boolean setHungerWeight(float weight) {
         float sanitized = sanitizeWeight(weight, MIN_HUNGER_WEIGHT, MAX_HUNGER_WEIGHT);
         if (Float.compare(hungerWeight, sanitized) != 0 || !Files.exists(getConfigPath())) {
             hungerWeight = sanitized;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static float getXpWeight() {
         return xpWeight;
     }
 
-    public static synchronized void setXpWeight(float weight) {
+    public static synchronized boolean setXpWeight(float weight) {
         float sanitized = sanitizeWeight(weight, MIN_XP_WEIGHT, MAX_XP_WEIGHT);
         if (Float.compare(xpWeight, sanitized) != 0 || !Files.exists(getConfigPath())) {
             xpWeight = sanitized;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static int getAffinityPercent() {
@@ -869,100 +947,109 @@ public final class OIMRConfig {
         return affinity >= MAX_AFFINITY;
     }
 
-    public static synchronized void setAffinityPercent(int percent) {
+    public static synchronized boolean setAffinityPercent(int percent) {
         int sanitized = sanitizeAffinity(percent);
         if (affinity != sanitized || !Files.exists(getConfigPath())) {
             affinity = sanitized;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isSyncEffectsEnabled() {
         return syncEffects;
     }
 
-    public static synchronized void setSyncEffects(boolean enabled) {
+    public static synchronized boolean setSyncEffects(boolean enabled) {
         if (syncEffects != enabled || !Files.exists(getConfigPath())) {
             syncEffects = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isSyncHotbarEnabled() {
         return syncHotbar;
     }
 
-    public static synchronized void setSyncHotbar(boolean enabled) {
+    public static synchronized boolean setSyncHotbar(boolean enabled) {
         if (syncHotbar != enabled || !Files.exists(getConfigPath())) {
             syncHotbar = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isSyncHelmetEnabled() {
         return syncHelmet;
     }
 
-    public static synchronized void setSyncHelmet(boolean enabled) {
+    public static synchronized boolean setSyncHelmet(boolean enabled) {
         if (syncHelmet != enabled || !Files.exists(getConfigPath())) {
             syncHelmet = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isSyncChestplateEnabled() {
         return syncChestplate;
     }
 
-    public static synchronized void setSyncChestplate(boolean enabled) {
+    public static synchronized boolean setSyncChestplate(boolean enabled) {
         if (syncChestplate != enabled || !Files.exists(getConfigPath())) {
             syncChestplate = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isSyncLeggingsEnabled() {
         return syncLeggings;
     }
 
-    public static synchronized void setSyncLeggings(boolean enabled) {
+    public static synchronized boolean setSyncLeggings(boolean enabled) {
         if (syncLeggings != enabled || !Files.exists(getConfigPath())) {
             syncLeggings = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isSyncBootsEnabled() {
         return syncBoots;
     }
 
-    public static synchronized void setSyncBoots(boolean enabled) {
+    public static synchronized boolean setSyncBoots(boolean enabled) {
         if (syncBoots != enabled || !Files.exists(getConfigPath())) {
             syncBoots = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isSyncMainHandEnabled() {
         return syncMainHand;
     }
 
-    public static synchronized void setSyncMainHand(boolean enabled) {
+    public static synchronized boolean setSyncMainHand(boolean enabled) {
         if (syncMainHand != enabled || !Files.exists(getConfigPath())) {
             syncMainHand = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static boolean isSyncOffHandEnabled() {
         return syncOffHand;
     }
 
-    public static synchronized void setSyncOffHand(boolean enabled) {
+    public static synchronized boolean setSyncOffHand(boolean enabled) {
         if (syncOffHand != enabled || !Files.exists(getConfigPath())) {
             syncOffHand = enabled;
-            save();
+            return save();
         }
+        return true;
     }
 
     public static synchronized SlotSyncState getSlotSyncState() {
@@ -977,7 +1064,7 @@ public final class OIMRConfig {
         );
     }
 
-    public static synchronized void setBooleanSettingWithTransition(
+    public static synchronized boolean setBooleanSettingWithTransition(
         String key,
         boolean enabled,
         Consumer<SlotSyncState> beforeCommit
@@ -986,7 +1073,7 @@ public final class OIMRConfig {
         if (beforeCommit != null) {
             beforeCommit.accept(nextState);
         }
-        switch (key) {
+        return switch (key) {
             case KEY_SHARED_KNOCKBACK -> setSharedKnockback(enabled);
             case KEY_SHARED_ENDER_PEARL -> setSharedEnderPearl(enabled);
             case KEY_SHARED_PORTALS -> setSharedPortals(enabled);
@@ -1006,7 +1093,7 @@ public final class OIMRConfig {
             case KEY_SYNC_MAIN_HAND -> setSyncMainHand(enabled);
             case KEY_SYNC_OFF_HAND -> setSyncOffHand(enabled);
             default -> throw new IllegalArgumentException("Unknown boolean OIMR setting key: " + key);
-        }
+        };
     }
 
     public static boolean isHotbarSlotSynced(int slot) {

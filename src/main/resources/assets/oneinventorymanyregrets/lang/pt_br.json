@@ -181,6 +181,8 @@
   "oimr.command.settings_status": "Configurações do OIMR | %1$s",
   "oimr.command.settings_reloaded": "Configurações do OIMR recarregadas | %1$s",
   "oimr.command.settings_reload_failed": "Falha ao recarregar configurações do OIMR (%1$s); mantendo configurações ativas | %2$s",
+  "oimr.command.settings_reload_applied_not_persisted": "As configurações do OIMR foram aplicadas, mas não puderam ser persistidas (%1$s) | %2$s",
+  "oimr.command.settings_save_failed": "A configuração do OIMR mudou em memória, mas não pôde ser persistida (%s)",
   "oimr.command.status": "Grupo: %1$s | Online: %2$s (%3$s) | Afinidade: %4$s%% | Fome: %5$sx / %6$s | XP: %7$sx / %8$s | Repulsão Comp.: %9$s | Vida: %10$s | Fome: %11$s | Nível de XP: %12$s",
   "oimr.command.status.none": "ninguém",
   "oimr.command.on": "LIGADO",

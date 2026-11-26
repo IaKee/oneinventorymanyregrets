@@ -127,7 +127,7 @@ public class EntityMixin implements HiveEntityPortalAccess {
             try {
                 original.call(level, except, x, y, z, sound, source, volume, pitch);
             } finally {
-                HiveMindManager.popActiveMobSoundSource();
+                HiveMindManager.popActiveMobSoundSource(mob);
             }
             return;
         }

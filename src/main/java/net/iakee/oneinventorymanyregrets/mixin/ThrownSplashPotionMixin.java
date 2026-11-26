@@ -21,7 +21,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class ThrownSplashPotionMixin {
     @Inject(method = "onHitAsPotion", at = @At("HEAD"))
     private void oimr$beginSplashImpact(ServerLevel level, ItemStack potionItem, HitResult hitResult, CallbackInfo ci) {
-        HiveMindManager.beginSplashPotionImpact();
+        HiveMindManager.beginSplashPotionImpact(level.getServer());
     }
 
     @WrapOperation(

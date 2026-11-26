@@ -93,7 +93,7 @@ public abstract class PlayerAdvancementsMixin implements HivePlayerAdvancementsA
         )
     )
     private boolean oimr$skipDuplicateRewards(AdvancementRewards rewards, ServerPlayer player) {
-        return !HiveMindManager.isSyncingAdvancements();
+        return !HiveMindManager.isSyncingAdvancements(this.player);
     }
 
     @WrapWithCondition(
@@ -104,7 +104,7 @@ public abstract class PlayerAdvancementsMixin implements HivePlayerAdvancementsA
         )
     )
     private boolean oimr$skipDuplicateAnnouncement(Optional<?> display, Consumer<?> action) {
-        return !HiveMindManager.isSyncingAdvancements();
+        return !HiveMindManager.isSyncingAdvancements(this.player);
     }
 
     @Override

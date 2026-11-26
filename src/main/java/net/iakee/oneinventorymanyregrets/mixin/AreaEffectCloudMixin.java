@@ -19,7 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class AreaEffectCloudMixin {
     @Inject(method = "serverTick", at = @At("HEAD"))
     private void oimr$beginCloudTick(ServerLevel level, CallbackInfo ci) {
-        HiveMindManager.beginPotionImpact(false);
+        HiveMindManager.beginPotionImpact(level.getServer(), false);
     }
 
     @WrapOperation(

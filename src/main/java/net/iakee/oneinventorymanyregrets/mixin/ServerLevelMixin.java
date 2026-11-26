@@ -32,7 +32,7 @@ public class ServerLevelMixin {
         long seed,
         CallbackInfo ci
     ) {
-        Mob activeMob = HiveMindManager.peekActiveMobSoundSource();
+        Mob activeMob = HiveMindManager.peekActiveMobSoundSource((ServerLevel) (Object) this);
         if (activeMob != null && (source == SoundSource.HOSTILE || source == SoundSource.NEUTRAL)) {
             HiveMindManager.onMobSoundEmitted(
                 (ServerLevel) (Object) this,

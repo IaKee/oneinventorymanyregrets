@@ -368,7 +368,7 @@ public class PersistenceAndConfigGameTests {
             ThrownSplashPotion potion = new ThrownSplashPotion(level, alice, splashRegen);
             potion.setPos(alice.getX(), alice.getY() + 0.5, alice.getZ());
             bob.teleportTo(alice.getX() + 10.0, alice.getY(), alice.getZ() + 10.0);
-            HiveMindManager.beginSplashPotionImpact();
+            HiveMindManager.beginSplashPotionImpact(server);
             boolean captured = HiveMindManager.captureSplashPotionEffect(alice, new MobEffectInstance(MobEffects.REGENERATION, 160, 0));
             HiveMindManager.endSplashPotionImpact(potion, alice);
             potion.discard();

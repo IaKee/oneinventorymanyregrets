@@ -570,7 +570,7 @@ public class EffectsAndEnvironmentGameTests {
             alice.damageCooldownTime = 0;
             alice.hurtServer(level, level.damageSources().cactus(), 10.0F); // +0.1 from Cactus -> 1.0 kills Bob
             helper.assertTrue(bob.isDeadOrDying(), "Bob must die when accumulated damage reaches 1.0");
-            Component deathMsg = HiveMindManager.getLastHiveDeathMessage(bob.getUUID());
+            Component deathMsg = HiveMindManager.getLastHiveDeathMessage(server, bob.getUUID());
             helper.assertTrue(deathMsg != null
                 && deathMsg.getContents() instanceof TranslatableContents tc
                 && "death.oimr.affinity.player".equals(tc.getKey()),

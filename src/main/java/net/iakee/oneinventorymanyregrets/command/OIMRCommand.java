@@ -21,6 +21,7 @@ import net.minecraft.server.level.ServerPlayer;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -177,7 +178,12 @@ public final class OIMRCommand {
                     .executes(context -> {
                         boolean enabled = BoolArgumentType.getBool(context, "enabled");
                         ServerPlayer initiator = context.getSource().getEntity() instanceof ServerPlayer player ? player : null;
-                        HiveMindManager.applyBooleanSetting(context.getSource().getServer(), initiator, key, enabled);
+                        boolean persisted = HiveMindManager.applyBooleanSetting(
+                            context.getSource().getServer(), initiator, key, enabled
+                        );
+                        if (!persisted) {
+                            return reportSaveFailure(context);
+                        }
                         context.getSource().sendSuccess(
                             () -> OIMRLang.localizeForSource(
                                 OIMRLang.translatable(
@@ -197,7 +203,7 @@ public final class OIMRCommand {
     private static LiteralArgumentBuilder<CommandSourceStack> scalingModeSetting(
         String key,
         java.util.function.Supplier<OIMRConfig.MultiMemberScalingMode> getter,
-        java.util.function.Consumer<OIMRConfig.MultiMemberScalingMode> setter
+        Function<OIMRConfig.MultiMemberScalingMode, Boolean> setter
     ) {
         LiteralArgumentBuilder<CommandSourceStack> builder = Commands.literal(key)
             .executes(OIMRCommand::executeSettingsStatus);
@@ -205,9 +211,12 @@ public final class OIMRCommand {
             builder.then(
                 Commands.literal(mode.configValue())
                     .executes(context -> {
-                        setter.accept(mode);
+                        boolean persisted = setter.apply(mode);
                         OIMRConfig.MultiMemberScalingMode updated = getter.get();
                         HiveMindManager.onConfigChanged(context.getSource().getServer());
+                        if (!persisted) {
+                            return reportSaveFailure(context);
+                        }
                         context.getSource().sendSuccess(
                             () -> OIMRLang.localizeForSource(
                                 OIMRLang.translatable(
@@ -233,9 +242,12 @@ public final class OIMRCommand {
             builder.then(
                 Commands.literal(filter.configValue())
                     .executes(context -> {
-                        OIMRConfig.setSharedMobSoundFilter(filter);
+                        boolean persisted = OIMRConfig.setSharedMobSoundFilter(filter);
                         OIMRConfig.MobSoundFilter updated = OIMRConfig.getSharedMobSoundFilter();
                         HiveMindManager.onConfigChanged(context.getSource().getServer());
+                        if (!persisted) {
+                            return reportSaveFailure(context);
+                        }
                         context.getSource().sendSuccess(
                             () -> OIMRLang.localizeForSource(
                                 OIMRLang.translatable(
@@ -256,9 +268,12 @@ public final class OIMRCommand {
 
     private static int executeSetSharedMobSoundVolume(CommandContext<CommandSourceStack> context) {
         int percent = IntegerArgumentType.getInteger(context, "percent");
-        OIMRConfig.setSharedMobSoundVolumePercent(percent);
+        boolean persisted = OIMRConfig.setSharedMobSoundVolumePercent(percent);
         int updated = OIMRConfig.getSharedMobSoundVolumePercent();
         HiveMindManager.onConfigChanged(context.getSource().getServer());
+        if (!persisted) {
+            return reportSaveFailure(context);
+        }
         context.getSource().sendSuccess(
             () -> OIMRLang.localizeForSource(
                 OIMRLang.translatable("oimr.command.setting_updated.percent", OIMRConfig.KEY_SHARED_MOB_SOUND_VOLUME, updated),
@@ -370,9 +385,12 @@ public final class OIMRCommand {
 
     private static int executeSetHungerWeight(CommandContext<CommandSourceStack> context) {
         float weight = FloatArgumentType.getFloat(context, "weight");
-        OIMRConfig.setHungerWeight(weight);
+        boolean persisted = OIMRConfig.setHungerWeight(weight);
         float updated = OIMRConfig.getHungerWeight();
         HiveMindManager.onConfigChanged(context.getSource().getServer());
+        if (!persisted) {
+            return reportSaveFailure(context);
+        }
         context.getSource().sendSuccess(
             () -> OIMRLang.localizeForSource(
                 OIMRLang.translatable("oimr.command.setting_updated", "hungerWeight", String.format(Locale.ROOT, "%.2f", updated)),
@@ -385,9 +403,12 @@ public final class OIMRCommand {
 
     private static int executeSetXpWeight(CommandContext<CommandSourceStack> context) {
         float weight = FloatArgumentType.getFloat(context, "weight");
-        OIMRConfig.setXpWeight(weight);
+        boolean persisted = OIMRConfig.setXpWeight(weight);
         float updated = OIMRConfig.getXpWeight();
         HiveMindManager.onConfigChanged(context.getSource().getServer());
+        if (!persisted) {
+            return reportSaveFailure(context);
+        }
         context.getSource().sendSuccess(
             () -> OIMRLang.localizeForSource(
                 OIMRLang.translatable("oimr.command.setting_updated", "xpWeight", String.format(Locale.ROOT, "%.2f", updated)),
@@ -400,9 +421,12 @@ public final class OIMRCommand {
 
     private static int executeSetAffinity(CommandContext<CommandSourceStack> context) {
         int percent = IntegerArgumentType.getInteger(context, "percent");
-        OIMRConfig.setAffinityPercent(percent);
+        boolean persisted = OIMRConfig.setAffinityPercent(percent);
         int updated = OIMRConfig.getAffinityPercent();
         HiveMindManager.onConfigChanged(context.getSource().getServer());
+        if (!persisted) {
+            return reportSaveFailure(context);
+        }
         context.getSource().sendSuccess(
             () -> OIMRLang.localizeForSource(
                 OIMRLang.translatable("oimr.command.setting_updated.percent", "affinity", updated),
@@ -418,6 +442,16 @@ public final class OIMRCommand {
         ServerPlayer initiator = context.getSource().getEntity() instanceof ServerPlayer player ? player : null;
         OIMRConfig.ReloadResult result = HiveMindManager.reloadConfig(server, initiator);
         Component summary = formatSettingsSummary();
+        if (result.status() == OIMRConfig.ReloadStatus.FAILED_APPLIED_NOT_PERSISTED) {
+            String reason = result.errorMessage() != null ? result.errorMessage() : "I/O error";
+            context.getSource().sendFailure(
+                OIMRLang.localizeForSource(
+                    OIMRLang.translatable("oimr.command.settings_reload_applied_not_persisted", reason, summary),
+                    context.getSource()
+                )
+            );
+            return 0;
+        }
         if (!result.isSuccess()) {
             String reason = result.errorMessage() != null ? result.errorMessage() : "I/O error";
             context.getSource().sendFailure(
@@ -436,6 +470,20 @@ public final class OIMRCommand {
             true
         );
         return 1;
+    }
+
+    private static int reportSaveFailure(CommandContext<CommandSourceStack> context) {
+        String reason = OIMRConfig.getLastSaveErrorMessage();
+        if (reason == null || reason.isBlank()) {
+            reason = "I/O error";
+        }
+        context.getSource().sendFailure(
+            OIMRLang.localizeForSource(
+                OIMRLang.translatable("oimr.command.settings_save_failed", reason),
+                context.getSource()
+            )
+        );
+        return 0;
     }
 
     private static int executeStatus(CommandContext<CommandSourceStack> context) throws CommandSyntaxException {
@@ -537,6 +585,11 @@ public final class OIMRCommand {
         String inactiveSummary = report.inactiveEmptyTeamHives().isEmpty()
             ? "-"
             : String.join(", ", report.inactiveEmptyTeamHives());
+        String stalePersonalSummary = report.stalePersonalStates().isEmpty()
+            ? "-"
+            : report.stalePersonalStates().stream()
+                .map(Object::toString)
+                .collect(Collectors.joining(", "));
 
         String key = dryRun ? "oimr.command.cleanup.dry_run" : "oimr.command.cleanup.executed";
         context.getSource().sendSuccess(
@@ -547,7 +600,7 @@ public final class OIMRCommand {
                     orphanedSummary,
                     report.inactiveEmptyTeamHives().size(),
                     inactiveSummary,
-                    report.stalePersonalStates().size(),
+                    report.stalePersonalStates().size() + " (" + stalePersonalSummary + ")",
                     report.totalCount()
                 ),
                 context.getSource()

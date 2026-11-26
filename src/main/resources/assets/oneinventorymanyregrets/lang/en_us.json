@@ -181,6 +181,8 @@
   "oimr.command.settings_status": "OIMR Settings | %1$s",
   "oimr.command.settings_reloaded": "Reloaded OIMR settings | %1$s",
   "oimr.command.settings_reload_failed": "Failed to reload OIMR settings (%1$s); keeping active settings | %2$s",
+  "oimr.command.settings_reload_applied_not_persisted": "OIMR settings were applied but could not be persisted (%1$s) | %2$s",
+  "oimr.command.settings_save_failed": "The OIMR setting changed in memory but could not be persisted (%s)",
   "oimr.command.status": "Group: %1$s | Online: %2$s (%3$s) | Affinity: %4$s%% | Hunger: %5$sx / %6$s | XP: %7$sx / %8$s | Shared KB: %9$s | HP: %10$s | Food: %11$s | XP Lv: %12$s",
   "oimr.command.status.none": "none",
   "oimr.command.on": "ON",

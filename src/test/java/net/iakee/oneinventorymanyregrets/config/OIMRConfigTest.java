@@ -113,6 +113,74 @@ class OIMRConfigTest {
     }
 
     @Test
+    void reloadFailureOnSemanticallyInvalidValuesKeepsActiveSettings() throws IOException {
+        Path configPath = this.tempDir.resolve("oneinventorymanyregrets.properties");
+        Files.writeString(
+            configPath,
+            "affinity=75\nsyncHotbar=false\nsharedKnockback=false\n",
+            StandardCharsets.UTF_8
+        );
+        assertEquals(OIMRConfig.ReloadStatus.LOADED, OIMRConfig.loadFromPath(configPath, false, null).status());
+
+        String[] invalidConfigurations = {
+            "syncHotbar=perhaps\n",
+            "sharedMobSoundFilter=unknown\n",
+            "sharedMobSoundVolume=101\n",
+            "lavaDamageMode=unknown\n",
+            "underwaterBreathMode=unknown\n",
+            "dotDamageMode=unknown\n",
+            "hungerWeight=NaN\n",
+            "xpWeight=999\n"
+        };
+        for (String invalidConfiguration : invalidConfigurations) {
+            Files.writeString(configPath, invalidConfiguration, StandardCharsets.UTF_8);
+            AtomicBoolean transitionCalled = new AtomicBoolean(false);
+
+            OIMRConfig.ReloadResult result = OIMRConfig.loadFromPath(
+                configPath,
+                true,
+                state -> transitionCalled.set(true)
+            );
+
+            assertEquals(OIMRConfig.ReloadStatus.FAILED_KEPT_PREVIOUS, result.status(), invalidConfiguration);
+            assertFalse(result.isSuccess(), invalidConfiguration);
+            assertFalse(transitionCalled.get(), invalidConfiguration);
+            assertEquals(75, OIMRConfig.getAffinityPercent(), invalidConfiguration);
+            assertFalse(OIMRConfig.isSyncHotbarEnabled(), invalidConfiguration);
+            assertFalse(OIMRConfig.isSharedKnockbackEnabled(), invalidConfiguration);
+        }
+    }
+
+    @Test
+    void saveFailureIsObservable() throws IOException {
+        Path parentAsFile = this.tempDir.resolve("not-a-directory");
+        Files.writeString(parentAsFile, "blocking file", StandardCharsets.UTF_8);
+
+        assertFalse(OIMRConfig.saveToPath(parentAsFile.resolve("config.properties")));
+        String errorMessage = OIMRConfig.getLastSaveErrorMessage();
+        assertTrue(errorMessage != null && !errorMessage.isBlank());
+    }
+
+    @Test
+    void missingConfigThatCannotBeCreatedReportsAppliedButNotPersisted() throws IOException {
+        Path parentAsFile = this.tempDir.resolve("not-a-directory");
+        Files.writeString(parentAsFile, "blocking file", StandardCharsets.UTF_8);
+        AtomicBoolean transitionCalled = new AtomicBoolean(false);
+
+        OIMRConfig.ReloadResult result = OIMRConfig.loadFromPath(
+            parentAsFile.resolve("config.properties"),
+            true,
+            state -> transitionCalled.set(true)
+        );
+
+        assertEquals(OIMRConfig.ReloadStatus.FAILED_APPLIED_NOT_PERSISTED, result.status());
+        assertFalse(result.isSuccess());
+        assertTrue(transitionCalled.get());
+        assertEquals(100, OIMRConfig.getAffinityPercent());
+        assertTrue(result.errorMessage() != null && !result.errorMessage().isBlank());
+    }
+
+    @Test
     void initialLoadFailureActuallyAppliesDefaults() throws IOException {
         Path configDirAsFile = this.tempDir.resolve("unreadable.properties");
         Files.createDirectory(configDirAsFile);

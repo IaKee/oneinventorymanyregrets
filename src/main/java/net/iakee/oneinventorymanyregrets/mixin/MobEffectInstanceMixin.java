@@ -40,7 +40,7 @@ public class MobEffectInstanceMixin {
         try {
             return original.call(instance, level, target, amplification);
         } finally {
-            HiveMindManager.endPeriodicEffectTick(tickFlags);
+            HiveMindManager.endPeriodicEffectTick(target, tickFlags);
         }
     }
 }

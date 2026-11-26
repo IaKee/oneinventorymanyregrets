@@ -317,7 +317,7 @@ public class CombatAndDeathGameTests {
             bob.damageCooldownTime = 0;
             bob.hurtServer(level, bob.damageSources().lava(), 50.0F);
 
-            Component aliceDeath = HiveMindManager.getLastHiveDeathMessage(alice.getUUID());
+            Component aliceDeath = HiveMindManager.getLastHiveDeathMessage(server, alice.getUUID());
             helper.assertTrue(aliceDeath != null
                 && aliceDeath.getContents() instanceof TranslatableContents tc
                 && "death.oimr.lava.player".equals(tc.getKey()),
@@ -336,7 +336,7 @@ public class CombatAndDeathGameTests {
             bob.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
 
             bob.hurtServer(level, level.damageSources().mobAttack(zombie), 50.0F);
-            Component cascadeDeath = HiveMindManager.getLastHiveDeathMessage(alice.getUUID());
+            Component cascadeDeath = HiveMindManager.getLastHiveDeathMessage(server, alice.getUUID());
             helper.assertTrue(cascadeDeath != null
                 && cascadeDeath.getContents() instanceof TranslatableContents tc2
                 && "death.oimr.cascade".equals(tc2.getKey()),
@@ -366,8 +366,8 @@ public class CombatAndDeathGameTests {
             OIMRConfig.setComunism(false);
             bob.hurtServer(level, level.damageSources().playerAttack(alice), 50.0F);
 
-            Component aliceDeath = HiveMindManager.getLastHiveDeathMessage(alice.getUUID());
-            Component charlieDeath = HiveMindManager.getLastHiveDeathMessage(charlie.getUUID());
+            Component aliceDeath = HiveMindManager.getLastHiveDeathMessage(server, alice.getUUID());
+            Component charlieDeath = HiveMindManager.getLastHiveDeathMessage(server, charlie.getUUID());
             helper.assertTrue(aliceDeath != null
                 && aliceDeath.getContents() instanceof TranslatableContents atc
                 && "death.oimr.friendly_fire.self".equals(atc.getKey()),
@@ -393,7 +393,7 @@ public class CombatAndDeathGameTests {
             charlie.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
 
             bob.hurtServer(level, bob.damageSources().drown(), 50.0F);
-            Component drownMsg = HiveMindManager.getLastHiveDeathMessage(alice.getUUID());
+            Component drownMsg = HiveMindManager.getLastHiveDeathMessage(server, alice.getUUID());
             helper.assertTrue(drownMsg != null
                 && drownMsg.getContents() instanceof TranslatableContents dtc
                 && "death.oimr.drown".equals(dtc.getKey()),
@@ -410,8 +410,8 @@ public class CombatAndDeathGameTests {
             charlie.connection.handleAcceptPlayerLoad(new ServerboundPlayerLoadedPacket());
 
             bob.hurtServer(level, bob.damageSources().starve(), 50.0F);
-            Component starveMsg = HiveMindManager.getLastHiveDeathMessage(alice.getUUID());
-            Component bobStarveMsg = HiveMindManager.getLastHiveDeathMessage(bob.getUUID());
+            Component starveMsg = HiveMindManager.getLastHiveDeathMessage(server, alice.getUUID());
+            Component bobStarveMsg = HiveMindManager.getLastHiveDeathMessage(server, bob.getUUID());
             helper.assertTrue(starveMsg != null
                 && starveMsg.getContents() instanceof TranslatableContents stc
                 && "death.oimr.starve.group".equals(stc.getKey())
@@ -443,9 +443,9 @@ public class CombatAndDeathGameTests {
 
             bob.hurtServer(level, bob.damageSources().starve(), 50.0F);
 
-            Component bobMsg = HiveMindManager.getLastHiveDeathMessage(bob.getUUID());
-            Component aliceMsg = HiveMindManager.getLastHiveDeathMessage(alice.getUUID());
-            Component charlieMsg = HiveMindManager.getLastHiveDeathMessage(charlie.getUUID());
+            Component bobMsg = HiveMindManager.getLastHiveDeathMessage(server, bob.getUUID());
+            Component aliceMsg = HiveMindManager.getLastHiveDeathMessage(server, alice.getUUID());
+            Component charlieMsg = HiveMindManager.getLastHiveDeathMessage(server, charlie.getUUID());
             helper.assertTrue(bobMsg != null
                 && bobMsg.getContents() instanceof TranslatableContents btc
                 && "death.oimr.comunism.group".equals(btc.getKey()),
@@ -531,7 +531,7 @@ public class CombatAndDeathGameTests {
 
             // 1. /kill -> death.oimr.generic_kill
             bob.kill(level);
-            Component killMsg = HiveMindManager.getLastHiveDeathMessage(alice.getUUID());
+            Component killMsg = HiveMindManager.getLastHiveDeathMessage(server, alice.getUUID());
             helper.assertTrue(killMsg != null
                 && killMsg.getContents() instanceof TranslatableContents ktc
                 && "death.oimr.generic_kill".equals(ktc.getKey()),
@@ -547,8 +547,8 @@ public class CombatAndDeathGameTests {
             // 2. Direct die(starve) with empty CombatTracker entries -> still emits death.oimr.starve.group
             bob.setHealth(0.0F);
             bob.die(bob.damageSources().starve());
-            Component starveMsg = HiveMindManager.getLastHiveDeathMessage(bob.getUUID());
-            Component aliceStarveMsg = HiveMindManager.getLastHiveDeathMessage(alice.getUUID());
+            Component starveMsg = HiveMindManager.getLastHiveDeathMessage(server, bob.getUUID());
+            Component aliceStarveMsg = HiveMindManager.getLastHiveDeathMessage(server, alice.getUUID());
             helper.assertTrue(starveMsg != null
                 && starveMsg.getContents() instanceof TranslatableContents stc
                 && "death.oimr.starve.group".equals(stc.getKey())
@@ -574,7 +574,7 @@ public class CombatAndDeathGameTests {
             bob.hurtServer(level, level.damageSources().arrow(arrow, alice), 50.0F);
             arrow.discard();
 
-            Component ffMsg = HiveMindManager.getLastHiveDeathMessage(alice.getUUID());
+            Component ffMsg = HiveMindManager.getLastHiveDeathMessage(server, alice.getUUID());
             helper.assertTrue(ffMsg != null
                 && ffMsg.getContents() instanceof TranslatableContents ftc
                 && "death.oimr.friendly_fire.self.item".equals(ftc.getKey()),
@@ -598,7 +598,7 @@ public class CombatAndDeathGameTests {
         ServerPlayer bob = spawnTestPlayer(server, level, "HiveBob24");
         try {
             bob.hurtServer(level, level.damageSources().fall(), 50.0F);
-            Component aliceDeath = HiveMindManager.getLastHiveDeathMessage(alice.getUUID());
+            Component aliceDeath = HiveMindManager.getLastHiveDeathMessage(server, alice.getUUID());
             helper.assertTrue(aliceDeath != null
                 && aliceDeath.getContents() instanceof TranslatableContents tc
                 && "death.oimr.fall".equals(tc.getKey())

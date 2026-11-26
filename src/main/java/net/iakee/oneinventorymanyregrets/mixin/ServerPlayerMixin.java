@@ -69,7 +69,7 @@ public class ServerPlayerMixin {
         CallbackInfo ci,
         @Share("oimrRestoreSuppressCascade") LocalBooleanRef restoreSuppress
     ) {
-        HiveMindManager.endPeacefulRegenTick(restoreSuppress.get());
+        HiveMindManager.endPeacefulRegenTick((ServerPlayer) (Object) this, restoreSuppress.get());
     }
     @WrapWithCondition(
         method = "doTick",

@@ -74,14 +74,9 @@ public final class HiveMindManager {
         coordinator.teamLifecycle().onBeforeSave();
     }
 
-    public static boolean isSyncingAdvancements() {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(null);
+    public static boolean isSyncingAdvancements(ServerPlayer player) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(player);
         return coordinator != null && coordinator.isSyncingAdvancements();
-    }
-
-    public static boolean isSyncingEnvironment() {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(null);
-        return coordinator != null && coordinator.isSyncingEnvironment();
     }
 
     public static boolean isAttachedServerPlayer(Object entity) {
@@ -133,13 +128,6 @@ public final class HiveMindManager {
         }
     }
 
-    public static void notifyIfInvalidAffinityReset(@Nullable MinecraftServer server) {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(server);
-        if (coordinator != null) {
-            coordinator.teamLifecycle().notifyIfInvalidAffinityReset();
-        }
-    }
-
     public static void onPlayerLeave(ServerPlayer player) {
         HiveMindCoordinator coordinator = coordinatorForEntity(player);
         if (coordinator != null) {
@@ -175,21 +163,21 @@ public final class HiveMindManager {
         }
     }
 
-    public static void applyBooleanSetting(
+    public static boolean applyBooleanSetting(
         @Nullable MinecraftServer server,
         @Nullable ServerPlayer initiator,
         String key,
         boolean enabled
     ) {
         if (server == null) {
-            OIMRConfig.setBooleanSettingWithTransition(key, enabled, null);
-            return;
+            return OIMRConfig.setBooleanSettingWithTransition(key, enabled, null);
         }
         HiveMindCoordinator coordinator = HiveMindCoordinator.getOrCreate(server);
-        OIMRConfig.setBooleanSettingWithTransition(key, enabled, nextSlotSync ->
+        boolean persisted = OIMRConfig.setBooleanSettingWithTransition(key, enabled, nextSlotSync ->
             coordinator.inventoryAndAmmo().prepareSlotSyncTransition(initiator, OIMRConfig.getSlotSyncState(), nextSlotSync)
         );
         coordinator.teamLifecycle().onConfigChanged();
+        return persisted;
     }
 
     public static OIMRConfig.ReloadResult reloadConfig(@Nullable MinecraftServer server, @Nullable ServerPlayer initiator) {
@@ -200,14 +188,14 @@ public final class HiveMindManager {
         OIMRConfig.ReloadResult result = OIMRConfig.reloadWithResult(nextSlotSync ->
             coordinator.inventoryAndAmmo().prepareSlotSyncTransition(initiator, OIMRConfig.getSlotSyncState(), nextSlotSync)
         );
-        if (result.isSuccess()) {
+        if (result.isSuccess() || result.status() == OIMRConfig.ReloadStatus.FAILED_APPLIED_NOT_PERSISTED) {
             coordinator.teamLifecycle().onConfigChanged();
             coordinator.teamLifecycle().notifyIfInvalidAffinityReset();
         }
         return result;
     }
 
-    public static void resetConfigToDefaults(@Nullable MinecraftServer server, @Nullable ServerPlayer initiator) {
+    public static boolean resetConfigToDefaults(@Nullable MinecraftServer server, @Nullable ServerPlayer initiator) {
         if (server != null) {
             HiveMindCoordinator coordinator = HiveMindCoordinator.getOrCreate(server);
             coordinator.inventoryAndAmmo().prepareSlotSyncTransition(
@@ -215,11 +203,11 @@ public final class HiveMindManager {
                 OIMRConfig.getSlotSyncState(),
                 OIMRConfig.SlotSyncState.ALL_SYNCED
             );
-            OIMRConfig.resetToDefaults();
+            boolean persisted = OIMRConfig.resetToDefaults();
             coordinator.teamLifecycle().onConfigChanged();
-            return;
+            return persisted;
         }
-        OIMRConfig.resetToDefaults();
+        return OIMRConfig.resetToDefaults();
     }
 
     public static void onConfigChanged(@Nullable MinecraftServer server) {
@@ -228,22 +216,12 @@ public final class HiveMindManager {
         }
     }
 
-    public static void beginTeamMutation() {
-        beginTeamMutation(null);
+    public static void beginTeamMutation(MinecraftServer server) {
+        HiveMindCoordinator.getOrCreate(server).teamLifecycle().beginTeamMutation();
     }
 
-    public static void beginTeamMutation(@Nullable MinecraftServer server) {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(server);
-        if (coordinator != null) {
-            coordinator.teamLifecycle().beginTeamMutation();
-        }
-    }
-
-    public static void endTeamMutation(@Nullable MinecraftServer server) {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(server);
-        if (coordinator != null) {
-            coordinator.teamLifecycle().endTeamMutation();
-        }
+    public static void endTeamMutation(MinecraftServer server) {
+        HiveMindCoordinator.getOrCreate(server).teamLifecycle().endTeamMutation();
     }
 
     public static void syncAllPlayerTeams(@Nullable MinecraftServer server) {
@@ -384,22 +362,12 @@ public final class HiveMindManager {
             : OptionalInt.empty();
     }
 
-    public static void beginSplashPotionImpact() {
-        beginPotionImpact(true);
+    public static void beginSplashPotionImpact(MinecraftServer server) {
+        beginPotionImpact(server, true);
     }
 
-    public static void beginPotionImpact(boolean stackDurations) {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(null);
-        if (coordinator != null) {
-            coordinator.effectSync().beginPotionImpact(stackDurations);
-        }
-    }
-
-    public static void beginPotionImpact(@Nullable MinecraftServer server, boolean stackDurations) {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(server);
-        if (coordinator != null) {
-            coordinator.effectSync().beginPotionImpact(stackDurations);
-        }
+    public static void beginPotionImpact(MinecraftServer server, boolean stackDurations) {
+        HiveMindCoordinator.getOrCreate(server).effectSync().beginPotionImpact(stackDurations);
     }
 
     public static boolean captureSplashPotionEffect(LivingEntity target, MobEffectInstance effect) {
@@ -463,8 +431,8 @@ public final class HiveMindManager {
         return coordinator != null ? coordinator.effectSync().beginPeriodicEffectTick(target, effectHolder) : 0;
     }
 
-    public static void endPeriodicEffectTick(int flags) {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(null);
+    public static void endPeriodicEffectTick(LivingEntity target, int flags) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(target);
         if (coordinator != null) {
             coordinator.effectSync().endPeriodicEffectTick(flags);
         }
@@ -500,8 +468,8 @@ public final class HiveMindManager {
         return coordinator != null && coordinator.vitalsAndDamage().beginPeacefulRegenTick(player);
     }
 
-    public static void endPeacefulRegenTick(boolean restoreSuppress) {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(null);
+    public static void endPeacefulRegenTick(ServerPlayer player, boolean restoreSuppress) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(player);
         if (coordinator != null) {
             coordinator.vitalsAndDamage().endPeacefulRegenTick(restoreSuppress);
         }
@@ -599,16 +567,15 @@ public final class HiveMindManager {
         }
     }
 
-    public static void popActiveMobSoundSource() {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(null);
+    public static void popActiveMobSoundSource(Mob mob) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(mob);
         if (coordinator != null) {
             coordinator.teleportAndAudio().popActiveMobSoundSource();
         }
     }
 
-    public static @Nullable Mob peekActiveMobSoundSource() {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(null);
-        return coordinator != null ? coordinator.teleportAndAudio().peekActiveMobSoundSource() : null;
+    public static @Nullable Mob peekActiveMobSoundSource(ServerLevel level) {
+        return HiveMindCoordinator.getOrCreate(level.getServer()).teleportAndAudio().peekActiveMobSoundSource();
     }
 
     public static void onMobSoundEmitted(
@@ -791,9 +758,8 @@ public final class HiveMindManager {
         return coordinator != null ? coordinator.deathCascade().consumePendingDeathMessage(entity) : null;
     }
 
-    public static @Nullable Component getLastHiveDeathMessage(UUID playerId) {
-        HiveMindCoordinator coordinator = HiveMindCoordinator.getFallbackOrActive(null);
-        return coordinator != null ? coordinator.deathCascade().getLastHiveDeathMessage(playerId) : null;
+    public static @Nullable Component getLastHiveDeathMessage(MinecraftServer server, UUID playerId) {
+        return HiveMindCoordinator.getOrCreate(server).deathCascade().getLastHiveDeathMessage(playerId);
     }
 
     public static boolean consumeSuppressDeathChat(ServerPlayer player) {

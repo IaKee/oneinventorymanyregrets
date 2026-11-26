@@ -38,7 +38,6 @@ import java.util.UUID;
  */
 public final class HiveMindCoordinator implements HiveMindContext {
     private static final Map<MinecraftServer, HiveMindCoordinator> COORDINATORS = Collections.synchronizedMap(new IdentityHashMap<>());
-    private static volatile @Nullable MinecraftServer fallbackServer = null;
 
     private final MinecraftServer server;
     private final Map<UUID, String> playerHives = new HashMap<>();
@@ -109,7 +108,6 @@ public final class HiveMindCoordinator implements HiveMindContext {
     }
 
     public static HiveMindCoordinator getOrCreate(MinecraftServer server) {
-        fallbackServer = server;
         return COORDINATORS.computeIfAbsent(server, HiveMindCoordinator::new);
     }
 
@@ -120,23 +118,10 @@ public final class HiveMindCoordinator implements HiveMindContext {
         return COORDINATORS.get(server);
     }
 
-    public static @Nullable HiveMindCoordinator getFallbackOrActive(@Nullable MinecraftServer server) {
-        if (server != null) {
-            return getOrCreate(server);
-        }
-        MinecraftServer fallback = fallbackServer;
-        return fallback != null ? COORDINATORS.get(fallback) : null;
-    }
-
     public static void destroy(MinecraftServer server) {
         HiveMindCoordinator removed = COORDINATORS.remove(server);
         if (removed != null) {
             removed.resetTransientState();
-        }
-        if (fallbackServer == server) {
-            synchronized (COORDINATORS) {
-                fallbackServer = COORDINATORS.isEmpty() ? null : COORDINATORS.keySet().iterator().next();
-            }
         }
     }
 

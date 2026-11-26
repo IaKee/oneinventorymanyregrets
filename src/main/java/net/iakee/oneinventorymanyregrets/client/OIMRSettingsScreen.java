@@ -23,6 +23,9 @@ import net.minecraft.util.Mth;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.util.Locale;
+import java.util.function.BiFunction;
+import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 
 /**
  * In-game and title-screen settings UI for One Inventory, Many Regrets.
@@ -352,7 +355,7 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
         String labelKey,
         String tooltipKey,
         OIMRConfig.MultiMemberScalingMode initialValue,
-        java.util.function.Consumer<OIMRConfig.MultiMemberScalingMode> setter
+        Function<OIMRConfig.MultiMemberScalingMode, Boolean> setter
     ) {
         return CycleButton.<OIMRConfig.MultiMemberScalingMode>builder(
                 value -> Component.translatable(value.translationKey()),
@@ -366,7 +369,7 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
                 150,
                 20,
                 Component.translatable(labelKey),
-                (button, value) -> applySetting(() -> setter.accept(value))
+                (button, value) -> applySetting(() -> setter.apply(value))
             );
     }
 
@@ -378,16 +381,17 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
         );
     }
 
-    private void applySetting(Runnable action) {
+    private void applySetting(BooleanSupplier action) {
         applyServerOrLocal((server, host) -> {
-            action.run();
+            boolean persisted = action.getAsBoolean();
             HiveMindManager.onConfigChanged(server);
+            return persisted;
         }, action, null);
     }
 
     private void applyServerOrLocal(
-        java.util.function.BiConsumer<net.minecraft.server.MinecraftServer, @org.jspecify.annotations.Nullable ServerPlayer> serverAction,
-        Runnable localAction,
+        BiFunction<net.minecraft.server.MinecraftServer, @org.jspecify.annotations.Nullable ServerPlayer, Boolean> serverAction,
+        BooleanSupplier localAction,
         @org.jspecify.annotations.Nullable Runnable afterOnClient
     ) {
         IntegratedServer server = this.minecraft != null ? this.minecraft.getSingleplayerServer() : null;
@@ -395,16 +399,38 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
             java.util.UUID hostUuid = this.minecraft.player != null ? this.minecraft.player.getUUID() : null;
             server.execute(() -> {
                 ServerPlayer host = hostUuid != null ? server.getPlayerList().getPlayer(hostUuid) : null;
-                serverAction.accept(server, host);
-                if (afterOnClient != null && this.minecraft != null) {
-                    this.minecraft.execute(afterOnClient);
+                boolean persisted = serverAction.apply(server, host);
+                if (this.minecraft != null) {
+                    this.minecraft.execute(() -> {
+                        if (!persisted) {
+                            showSaveFailure();
+                        }
+                        if (afterOnClient != null) {
+                            afterOnClient.run();
+                        }
+                    });
                 }
             });
         } else {
-            localAction.run();
+            boolean persisted = localAction.getAsBoolean();
+            if (!persisted) {
+                showSaveFailure();
+            }
             if (afterOnClient != null) {
                 afterOnClient.run();
             }
+        }
+    }
+
+    private void showSaveFailure() {
+        String reason = OIMRConfig.getLastSaveErrorMessage();
+        if (reason == null || reason.isBlank()) {
+            reason = "I/O error";
+        }
+        if (this.minecraft != null) {
+            this.minecraft.gui.hud.getChat().addClientSystemMessage(
+                Component.translatable("oimr.command.settings_save_failed", reason).withStyle(ChatFormatting.RED)
+            );
         }
     }
 
@@ -471,7 +497,7 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
 
     private final class WeightSlider extends AbstractSliderButton {
         private final String labelKey;
-        private final java.util.function.Consumer<Float> setter;
+        private final Function<Float, Boolean> setter;
         private float displayWeight;
 
         private WeightSlider(
@@ -479,7 +505,7 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
             int height,
             String labelKey,
             float initialWeight,
-            java.util.function.Consumer<Float> setter
+            Function<Float, Boolean> setter
         ) {
             super(
                 0,
@@ -508,7 +534,7 @@ public class OIMRSettingsScreen extends OptionsSubScreen {
         protected void applyValue() {
             float weight = snappedWeight();
             this.displayWeight = weight;
-            applySetting(() -> this.setter.accept(weight));
+            applySetting(() -> this.setter.apply(weight));
         }
     }
 
