@@ -307,6 +307,16 @@ public final class HiveMindManager {
         return coordinator != null && coordinator.inventoryAndAmmo().shouldRejectStaleOrEmptyUseItem(player, itemStack, hand);
     }
 
+    public static boolean shouldRejectStaleUseItemOn(ServerPlayer player, ItemStack itemStack, InteractionHand hand) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(player);
+        return coordinator != null && coordinator.inventoryAndAmmo().shouldRejectStaleUseItemOn(player, itemStack, hand);
+    }
+
+    public static boolean shouldRejectEmptyOrStaleConsume(ServerPlayer player, ItemStack stack) {
+        HiveMindCoordinator coordinator = coordinatorForEntity(player);
+        return coordinator != null && coordinator.inventoryAndAmmo().shouldRejectEmptyOrStaleConsume(player, stack);
+    }
+
     public static void onAfterServerPlayerUseItem(ServerPlayer player, InteractionHand hand, InteractionResult result) {
         HiveMindCoordinator coordinator = coordinatorForEntity(player);
         if (coordinator != null) {

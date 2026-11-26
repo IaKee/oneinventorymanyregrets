@@ -1,7 +1,7 @@
 # Backlog do Projeto — One Inventory, Many Regrets
 
 > Documento de organização de tarefas (mecânicas novas, correções críticas, refatoração arquitetural e pendências de publicação).  
-> **Nota:** Este arquivo consolida o brainstorm de mecânicas e melhorias com os apontamentos da auditoria em [TECHNICAL_DEBT.md](TECHNICAL_DEBT.md). Nenhum item abaixo está implementado ainda, salvo onde indicado como já parcialmente tratado.
+> **Nota (atualizada em 26/11/2026):** Os 4 épicos (`BL-001` a `BL-013`) tiveram sua implementação principal concluída, mas a auditoria pós-implementação identificou pendências abertas, casos de borda, lacunas de testes/SOLID e trechos desatualizados na documentação (detalhados na seção final deste arquivo). Consulte também [TECHNICAL_DEBT.md](TECHNICAL_DEBT.md).
 
 ## Legenda
 
@@ -16,21 +16,21 @@
 
 ## Visão Geral
 
-| ID | Título | Épico | Prioridade | Esforço | Ref. Auditoria |
-| --- | --- | --- | :---: | :---: | --- |
-| `BL-001` | Desligamento seguro de sync em runtime sem duplicar itens/efeitos | Integridade & Anti-Duplicação | P0 | G | `TD-001` |
-| `BL-002` | Reserva/consumo determinístico de munição e itens secundários ao iniciar uso | Integridade & Anti-Duplicação | P1 | M/G | — |
-| `BL-003` | Cooldown individual em arremessáveis + consumo imediato do último item | Integridade & Anti-Duplicação | P1 | M | — |
-| `BL-004` | Efeitos replicados individuais para afinidade parcial (`0% < N < 100%`) | Mecânicas & Balanceamento | P2 | G | — |
-| `BL-005` | Setting de dano de lava para múltiplos membros (`1x` cap vs. `Nx`) | Mecânicas & Balanceamento | P2 | P | — |
-| `BL-006` | Setting de fôlego subaquático para múltiplos membros (`1x` cap vs. `Nx`) | Mecânicas & Balanceamento | P2 | P | — |
-| `BL-007` | Setting de DoTs para múltiplos membros (`1x` cap vs. `Nx`) | Mecânicas & Balanceamento | P2 | P/M | — |
-| `BL-008` | Plano de refatoração do núcleo monolítico seguindo princípios SOLID | Arquitetura & Confiabilidade | P2 | G | `TD-011` |
-| `BL-009` | Política e expurgo de hives e estados pessoais órfãos | Arquitetura & Confiabilidade | P2 | M/G | `TD-007` |
-| `BL-010` | Escrita atômica de config e correção do fallback no reload | Arquitetura & Confiabilidade | P2 | P/M | `TD-009` |
-| `BL-011` | Política de traduções (suporte oficial + aviso IA + chaves faltantes) | Qualidade, Docs & Licença | P0 | M | `TD-002` |
-| `BL-012` | Escopo explícito de licença para terceiros e inventário de procedência | Qualidade, Docs & Licença | P0 | M | `TD-003` |
-| `BL-013` | Testes automatizados e roteiro manual de Cliente, UI e Áudio | Qualidade, Docs & Licença | P1 | M/G | `TD-004` |
+| ID | Título | Épico | Prioridade | Esforço | Status (26/11/2026) | Ref. Auditoria |
+| --- | --- | --- | :---: | :---: | --- | --- |
+| `BL-001` | Desligamento seguro de sync em runtime sem duplicar itens/efeitos | Integridade & Anti-Duplicação | P0 | G | Concluído (`README.md`/`TECHNICAL_DEBT.md` alinhados; sobra decisão menor de `syncEffects`) | `TD-001` |
+| `BL-002` | Reserva/consumo determinístico de munição e itens secundários ao iniciar uso | Integridade & Anti-Duplicação | P1 | M/G | Concluído (disconnect, morte e troca de equipe cobertos em GameTest) | — |
+| `BL-003` | Cooldown individual em arremessáveis + consumo imediato do último item | Integridade & Anti-Duplicação | P1 | M | Concluído (guardas em `ConsumableMixin` e `useItemOn` + GameTests adicionados) | — |
+| `BL-004` | Efeitos replicados individuais para afinidade parcial (`0% < N < 100%`) | Mecânicas & Balanceamento | P2 | G | Implementado (restam apenas traduções experimentais via `BL-011`) | — |
+| `BL-005` | Setting de dano de lava para múltiplos membros (`1x` cap vs. `Nx`) | Mecânicas & Balanceamento | P2 | P | Concluído | — |
+| `BL-006` | Setting de fôlego subaquático para múltiplos membros (`1x` cap vs. `Nx`) | Mecânicas & Balanceamento | P2 | P | Concluído (coberto com Respiração e `DROWN` em `50%` de afinidade) | — |
+| `BL-007` | Setting de DoTs para múltiplos membros (`1x` cap vs. `Nx`) | Mecânicas & Balanceamento | P2 | P/M | Concluído (`DRAGON_BREATH` incluído + GameTests em `50%` de afinidade) | — |
+| `BL-008` | Plano de refatoração do núcleo monolítico seguindo princípios SOLID | Arquitetura & Confiabilidade | P2 | G | Parcial (ISP aplicado em `HiveMindContexts`; restam `HiveMind`/`OIMRConfig`) | `TD-011` |
+| `BL-009` | Política e expurgo de hives e estados pessoais órfãos | Arquitetura & Confiabilidade | P2 | M/G | Concluído (`TD-007` atualizado; opcional P3: expurgo automático/backup) | `TD-007` |
+| `BL-010` | Escrita atômica de config e correção do fallback no reload | Arquitetura & Confiabilidade | P2 | P/M | Concluído (`TD-009` atualizado; opcional P3: auto-restore de `.bak`) | `TD-009` |
+| `BL-011` | Política de traduções (suporte oficial + aviso IA + chaves faltantes) | Qualidade, Docs & Licença | P0 | M | Implementado (`README.md` atualizado; 143 rascunhos aguardam revisão) | `TD-002` |
+| `BL-012` | Escopo explícito de licença para terceiros e inventário de procedência | Qualidade, Docs & Licença | P0 | M | **Pendente P0** (`ASSET_PROVENANCE.md` aguarda confirmação do titular) | `TD-003` |
+| `BL-013` | Testes automatizados e roteiro manual de Cliente, UI e Áudio | Qualidade, Docs & Licença | P1 | M/G | **Parcial P1** (22 JUnit + UI coupling verdes; falta matriz manual e HUD/TAB) | `TD-004` |
 
 ---
 
@@ -244,3 +244,60 @@
    - `BL-005`, `BL-006`, `BL-007` (settings de lava, respiração e DoT com cap `1x` por padrão).
    - `BL-004` (efeitos replicados individuais para afinidade parcial `0% < N < 100%`).
    - `BL-013` (testes de cliente/UI/áudio e validação multiplayer contínua).
+
+---
+
+## Pente Fino Pós-Implementação dos 4 Épicos (26/11/2026)
+
+Auditoria realizada sobre o commit `5be8882` inspecionando código-fonte, mixins, configurações, testes unitários/GameTests e documentação. Abaixo estão todos os itens que **ainda precisam ser implementados, corrigidos ou concluídos**, separados por área.
+
+### 1. Bloqueios e Pendências Críticas de Publicação (`P0` / `P1`)
+
+- [ ] **`BL-012` — Confirmar titularidade/procedência dos 4 grupos de PNGs em `ASSET_PROVENANCE.md` (`P0`)**
+  - Os 4 grupos (`icon.png`, `textures/gui/sprites/tab/*.png`, `textures/gui/sprites/hud/damage/*.png`, `textures/mob_effect/*.png`) ainda estão marcados como `confirmation required`. Falta a declaração explícita do titular (`Giordano Souza / iakee`).
+- [ ] **`BL-013` — Executar e registrar a matriz manual em `docs/MANUAL_TEST_CHECKLIST.md` (`P1`)**
+  - Todos os blocos manuais estão abertos: matriz Windows/Linux, `OIMRSettingsScreen` (multiplayer bloqueado, teclado/narrador, 640×360 e escalas de GUI), HUD/TAB, áudio subaquático e de mobs em fones/legendas, servidor dedicado com 2 clientes e teste com cliente vanilla.
+- [x] **`BL-003` — Proteger consumíveis contínuos contra consumo duplo no mesmo tick da última unidade (`P1`)**
+  - **Resolvido:** adicionado `InventoryAndAmmoService.shouldRejectEmptyOrStaleConsume` com guarda no `HEAD` de `ConsumableMixin.onConsume` e `InventoryAndAmmoService.shouldRejectStaleUseItemOn` no `HEAD` de `ServerPlayerGameModeMixin.useItemOn` (preservando interações de mão vazia em blocos).
+- [ ] **Itens de publicação fora dos Épicos 1–4 (`TECHNICAL_DEBT.md`, `P1`/`P2` — dependem de decisão/execução do titular):**
+  - `TD-006` (`P1`): corrigir DNS de `https://iakee.online` ou remover o campo `homepage` de `src/main/resources/fabric.mod.json`.
+  - `TD-005` / `TD-014` / `TD-015` (`P1`/`P2`): decidir ícone final (256×256 atual), gerar screenshots reais (removendo placeholders do `README.md`), criar changelog/notas de versão, validar política da versão `1.0.0` e workflow de release.
+  - `TD-010` (`P2`): montar matriz mínima de compatibilidade com outros mods sobre os 47 Mixins registrados em `oneinventorymanyregrets.mixins.json`.
+  - `TD-012` (`P2`): avaliar substituição de `loom_version=1.19-SNAPSHOT` por versão estável, restringir faixa de `fabric-api` no `fabric.mod.json` e adicionar travas/verification-metadata.
+  - `TD-013` (`P2`): esclarecer na UI do menu principal que alterações locais não afetam servidores dedicados e avaliar permissão configurável de operadores.
+  - `TD-016` (`P3`): adicionar documentos de governança (`CONTRIBUTING.md`, `SECURITY.md`, templates de issue/PR).
+
+### 2. Lacunas de Cobertura de Testes Automatizados (`P1` / `P2`)
+
+- [x] **`BL-002` — Cobrir desconexão, morte e troca de equipe durante o *draw* em GameTest (`P1`)**
+  - **Resolvido:** `InventoryIntegrityGameTests.testAmmoReservationReleasedOnDisconnectDeathAndTeamSwitch` valida reembolso na desconexão, devolução ao hive antigo na troca de equipe sem vazamento e liberação/drop único na morte.
+- [x] **`BL-003` — Ampliar GameTest de arremessáveis e consumíveis contínuos (`P1`)**
+  - **Resolvido:** `InventoryIntegrityGameTests.testMoreThrowablesContinuousConsumableAndUseItemOnRace` cobre `SPLASH_POTION`, `EXPERIENCE_BOTTLE`, `EGG`, corrida de `GOLDEN_APPLE` no mesmo tick e `useItemOn` com stack obsoleto.
+- [x] **`BL-006` e `BL-007` — Cobrir afinidade parcial (`0% < N < 100%`) e Respiração nos GameTests de `underwaterBreathMode` e `dotDamageMode` (`P2`)**
+  - **Resolvido:** `EffectsAndEnvironmentGameTests.testUnderwaterBreathModeCap1xVsMultiplicative` cobre Respiração III em `nx` e `DROWN` em `50%` de afinidade (`1x` vs `nx`); `CombatAndDeathGameTests.testDotDamageModeCap1xVsMultiplicative` cobre `DRAGON_BREATH`, `FREEZE` e `POISON` em `50%` de afinidade.
+- [x] **`BL-013` (parte automatizável) — Expandir Client GameTests e testes unitários JUnit de cliente (`P1` / `P2`)**
+  - **Resolvido:** `OIMRClientGameTests` agora valida acoplamento de controles (`syncHotbar`/`MainHand`, `excludeCreative`/`wipeCreative`, `sharedMobSounds`/filtro/volume), rolagem e rodapé em 640×360; `src/test/.../client/` ganhou `ClientHudFeedStateTest` (4 testes) e `ClientUnderwaterStateTest` (3 testes), totalizando 22 testes JUnit.
+- [ ] **`BL-013` (HUD/TAB ao vivo) — Automatizar renderização/estado de `OIMRHudOverlay` e `PlayerTabOverlayMixin` com mundo carregado (`P2`)**
+  - Ainda coberto apenas por inspeção e roteiro manual (`docs/MANUAL_TEST_CHECKLIST.md`).
+
+### 3. Ajustes de Mecânica, Arquitetura (SOLID) e Confiabilidade (`P2` / `P3`)
+
+- [x] **`BL-007` — Incluir `DamageTypes.DRAGON_BREATH` no catálogo de DoTs (`P2`)**
+  - **Resolvido:** adicionado `HazardCapCategory.DRAGON_BREATH` em `HiveMind` e mapeado em `VitalsAndDamageService.resolveCappedHazardCategory`, com cobertura em GameTest.
+- [ ] **`BL-001` — Definir comportamento esperado para buffs vanilla ativos ao desligar `syncEffects` em runtime (`P3`)**
+  - Ao desativar `syncEffects`, `TeamLifecycleService.onConfigChanged` limpa `hive.getEffects()`, remainders e efeitos replicados, mas efeitos vanilla já aplicados permanecem individualmente em cada membro até expirar. Validar se o comportamento atual é desejado ou se deve haver remoção/aviso explícito.
+- [ ] **`BL-008` — Fechar pendências SOLID restantes no núcleo (`P2`)**
+  - [x] **ISP em `HiveMindContext.java`:** fatiado em sub-interfaces estreitas por domínio em `HiveMindContexts` (`InventoryAmmo`, `EffectSync`, `VitalsDamage`, `EnvironmentSync`, `ProgressionSocial`, `DeathCascade`, `TeleportAudio`, `TeamLifecycle`), aplicadas nos 8 serviços.
+  - [ ] **Decomposição de `HiveMind.java` (1.102 linhas) e `OIMRConfig.java` (1.120 linhas):** separar cálculo/regras de estado em `HiveMind` dos codecs de persistência e desacoplar `OIMRConfig` de estado estático global mutável para facilitar isolamento entre testes/servidores.
+  - [ ] **`TD-008` — Perfilagem de tick:** embora `onlineMembersByHive` tenha eliminado a iteração sobre hives ociosos, ainda falta perfilar (JFR/spark) o custo por tick de `broadcastChanges`, `detectEquipmentUpdates`, `flushDirty` e `lastSentInventoryStacks` com 10–50 jogadores.
+- [ ] **`BL-009` / `BL-010` — Melhorias operacionais opcionais (`P3`)**
+  - Avaliar limpeza automática periódica opcional (ou configurável) e geração de backup antes de `/oimr cleanup confirm` (`BL-009`), além de recuperação opcional via `.bak` quando a carga inicial de `OIMRConfig` detectar arquivo corrompido (`BL-010`).
+
+### 4. Sincronização da Documentação Desatualizada (`P1` / `P2`)
+
+- [x] **`README.md` (`P1`):**
+  - **Resolvido:** aviso antigo de duplicação substituído pela documentação do drop canônico em runtime (`BL-001`), chaves `syncEffects`, `sharedMobSoundFilter` e `sharedMobSoundVolume` adicionadas à tabela de configuração e contagens de testes atualizadas.
+- [x] **`TECHNICAL_DEBT.md` (`TD-001`, `TD-004`, `TD-007`, `TD-008`, `TD-009`, `TD-011`) (`P2`):**
+  - **Resolvido:** itens atualizados com o estado real após os 4 épicos e o pente fino (mantendo em aberto apenas os residuais reais).
+- [ ] **`BL-011` — Traduções experimentais (143 arquivos) (`P3` / longo prazo):**
+  - Mantidos fora do JAR por decisão `(a)`; permanecem com 45 chaves faltantes (catalogadas em `TRANSLATIONS.md`) e sem procedência humana registrada.

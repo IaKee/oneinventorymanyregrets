@@ -38,9 +38,9 @@ import java.util.UUID;
  * villager reputation/trading prices, and friendly pet targeting.
  */
 public final class ProgressionAndSocialService {
-    private final HiveMindContext ctx;
+    private final HiveMindContexts.ProgressionSocial ctx;
 
-    public ProgressionAndSocialService(HiveMindContext ctx) {
+    public ProgressionAndSocialService(HiveMindContexts.ProgressionSocial ctx) {
         this.ctx = ctx;
     }
 
@@ -63,7 +63,7 @@ public final class ProgressionAndSocialService {
         }
         double scaled = ((double) weight * (double) rawPoints) / (double) denominator;
         double total = hive.getXpRemainder() + scaled;
-        int whole = Mth.floor(total + HiveMindContext.FRACTIONAL_EPSILON);
+        int whole = Mth.floor(total + HiveMindContexts.FRACTIONAL_EPSILON);
         hive.setXpRemainder(Math.max(0.0D, total - whole));
         this.ctx.data().setDirty();
         return whole;
@@ -88,7 +88,7 @@ public final class ProgressionAndSocialService {
         }
         double scaled = ((double) weight * (double) rawLevels) / (double) denominator;
         double total = hive.getXpLevelRemainder() + scaled;
-        int whole = Mth.floor(total + HiveMindContext.FRACTIONAL_EPSILON);
+        int whole = Mth.floor(total + HiveMindContexts.FRACTIONAL_EPSILON);
         hive.setXpLevelRemainder(Math.max(0.0D, total - whole));
         this.ctx.data().setDirty();
         return whole;

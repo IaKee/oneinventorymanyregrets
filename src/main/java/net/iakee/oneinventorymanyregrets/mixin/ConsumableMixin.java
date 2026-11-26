@@ -17,7 +17,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 @Mixin(Consumable.class)
 public class ConsumableMixin {
-    @Inject(method = "onConsume", at = @At("HEAD"))
+    @Inject(method = "onConsume", at = @At("HEAD"), cancellable = true)
     private void oimr$capturePreConsumeFood(
         Level level,
         LivingEntity entity,
@@ -26,6 +26,14 @@ public class ConsumableMixin {
         @Share("oimrConsumedFood") LocalRef<ItemStack> consumedFood,
         @Share("oimrPreFoodLevel") LocalIntRef preFoodLevel
     ) {
+        if (!level.isClientSide() && entity instanceof ServerPlayer player && HiveMindManager.shouldRejectEmptyOrStaleConsume(player, stack)) {
+            consumedFood.set(null);
+            ItemStack replacement = player.isUsingItem()
+                ? player.getItemInHand(player.getUsedItemHand())
+                : stack;
+            cir.setReturnValue(replacement);
+            return;
+        }
         if (!level.isClientSide() && entity instanceof ServerPlayer player && stack.has(DataComponents.FOOD)) {
             consumedFood.set(stack.copyWithCount(1));
             preFoodLevel.set(player.getFoodData().getFoodLevel());

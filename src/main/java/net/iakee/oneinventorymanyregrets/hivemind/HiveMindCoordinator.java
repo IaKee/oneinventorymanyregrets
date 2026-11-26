@@ -5,6 +5,7 @@ import net.iakee.oneinventorymanyregrets.hivemind.service.DeathCascadeService;
 import net.iakee.oneinventorymanyregrets.hivemind.service.EffectSyncService;
 import net.iakee.oneinventorymanyregrets.hivemind.service.EnvironmentSyncService;
 import net.iakee.oneinventorymanyregrets.hivemind.service.HiveMindContext;
+import net.iakee.oneinventorymanyregrets.hivemind.service.HiveMindContexts.*;
 import net.iakee.oneinventorymanyregrets.hivemind.service.InventoryAndAmmoService;
 import net.iakee.oneinventorymanyregrets.hivemind.service.ProgressionAndSocialService;
 import net.iakee.oneinventorymanyregrets.hivemind.service.TeamLifecycleService;

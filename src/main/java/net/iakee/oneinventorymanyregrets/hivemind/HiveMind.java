@@ -211,7 +211,8 @@ public final class HiveMind {
         POISON,
         WITHER,
         CACTUS,
-        SWEET_BERRY_BUSH
+        SWEET_BERRY_BUSH,
+        DRAGON_BREATH
     }
 
     public static final class HazardWindowState {

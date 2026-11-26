@@ -36,9 +36,9 @@ import java.util.UUID;
 public final class EffectSyncService {
     private static final Identifier HEALTH_BOOST_MODIFIER_ID = Identifier.withDefaultNamespace("effect.health_boost");
 
-    private final HiveMindContext ctx;
+    private final HiveMindContexts.EffectSync ctx;
 
-    public EffectSyncService(HiveMindContext ctx) {
+    public EffectSyncService(HiveMindContexts.EffectSync ctx) {
         this.ctx = ctx;
     }
 
@@ -137,11 +137,11 @@ public final class EffectSyncService {
     }
 
     public void beginPotionImpact(boolean stackDurations) {
-        this.ctx.setSplashImpact(new HiveMindContext.SplashImpactState(stackDurations));
+        this.ctx.setSplashImpact(new HiveMindContexts.SplashImpactState(stackDurations));
     }
 
     public boolean captureSplashPotionEffect(LivingEntity target, MobEffectInstance effect) {
-        HiveMindContext.SplashImpactState splashImpact = this.ctx.getSplashImpact();
+        HiveMindContexts.SplashImpactState splashImpact = this.ctx.getSplashImpact();
         if (splashImpact == null
             || this.ctx.isSyncingEffects()
             || !OIMRConfig.isSyncEffectsEnabled()
@@ -168,7 +168,7 @@ public final class EffectSyncService {
         int amplifier,
         double healthFactor
     ) {
-        HiveMindContext.SplashImpactState splashImpact = this.ctx.getSplashImpact();
+        HiveMindContexts.SplashImpactState splashImpact = this.ctx.getSplashImpact();
         if (splashImpact == null
             || this.ctx.isSyncingEffects()
             || !OIMRConfig.isFullAffinity()
@@ -186,7 +186,7 @@ public final class EffectSyncService {
     }
 
     public void endSplashPotionImpact(Entity potion, @Nullable Entity effectSource) {
-        HiveMindContext.SplashImpactState state = this.ctx.getSplashImpact();
+        HiveMindContexts.SplashImpactState state = this.ctx.getSplashImpact();
         this.ctx.setSplashImpact(null);
         if (state == null || state.isEmpty() || !(potion.level() instanceof ServerLevel level)) {
             return;
@@ -195,7 +195,7 @@ public final class EffectSyncService {
         if (!state.entries.isEmpty()) {
             this.ctx.setSyncingEffects(true);
             try {
-                for (HiveMindContext.SplashImpactAccumulator entry : state.entries.values()) {
+                for (HiveMindContexts.SplashImpactAccumulator entry : state.entries.values()) {
                     HiveMind hive = data.getIfPresent(entry.hiveId);
                     if (hive == null) {
                         continue;
@@ -232,7 +232,7 @@ public final class EffectSyncService {
                 this.ctx.setSyncingEffects(false);
             }
         }
-        for (HiveMindContext.InstantaneousImpactEntry entry : state.instantEntries.values()) {
+        for (HiveMindContexts.InstantaneousImpactEntry entry : state.instantEntries.values()) {
             if (entry.target.isAlive() && this.ctx.isAttached(entry.target)) {
                 entry.effect.applyInstantaneousEffect(
                     level,
@@ -469,8 +469,8 @@ public final class EffectSyncService {
                     if (other == player) {
                         continue;
                     }
-                    if (exactFineUnits >= 1.0D - HiveMindContext.FRACTIONAL_EPSILON) {
-                        int totalFineUnits = Math.max(1, (int) Math.floor(exactFineUnits + HiveMindContext.FRACTIONAL_EPSILON));
+                    if (exactFineUnits >= 1.0D - HiveMindContexts.FRACTIONAL_EPSILON) {
+                        int totalFineUnits = Math.max(1, (int) Math.floor(exactFineUnits + HiveMindContexts.FRACTIONAL_EPSILON));
                         int coarseLevels = totalFineUnits / OIMRMobEffects.FINE_SUBDIVISIONS;
                         int fineLevels = totalFineUnits % OIMRMobEffects.FINE_SUBDIVISIONS;
                         if (coarseLevels > 0) {
@@ -518,7 +518,7 @@ public final class EffectSyncService {
                         } else {
                             double scaledDuration = (double) effect.getDuration() * exactFineUnits;
                             double totalDuration = hive.getEffectDurationRemainder(other.getUUID(), fineCounterpart) + scaledDuration;
-                            targetDuration = Mth.floor(totalDuration + HiveMindContext.FRACTIONAL_EPSILON);
+                            targetDuration = Mth.floor(totalDuration + HiveMindContexts.FRACTIONAL_EPSILON);
                             double nextRem = Math.max(0.0D, totalDuration - targetDuration);
                             hive.setEffectDurationRemainder(other.getUUID(), fineCounterpart, nextRem);
                             dirty = true;
@@ -578,7 +578,7 @@ public final class EffectSyncService {
                 if (omenTrigger || deathTrigger) {
                     double gain = omenTrigger ? (fullAmplifier + 1) * factor : factor;
                     double totalTrigger = hive.getEffectTriggerRemainder(other.getUUID(), effectHolder) + gain;
-                    int grantedUnits = Mth.floor(totalTrigger + HiveMindContext.FRACTIONAL_EPSILON);
+                    int grantedUnits = Mth.floor(totalTrigger + HiveMindContexts.FRACTIONAL_EPSILON);
                     double nextTriggerRem = Math.max(0.0D, totalTrigger - grantedUnits);
                     hive.setEffectTriggerRemainder(other.getUUID(), effectHolder, nextTriggerRem);
                     dirty = true;
@@ -610,7 +610,7 @@ public final class EffectSyncService {
                         continue;
                     }
                     double totalDuration = nextDurationRem + scaledDuration;
-                    int units = Mth.floor((totalDuration + HiveMindContext.FRACTIONAL_EPSILON) / unitTicks);
+                    int units = Mth.floor((totalDuration + HiveMindContexts.FRACTIONAL_EPSILON) / unitTicks);
                     targetDuration = units * unitTicks;
                     nextDurationRem = Math.max(0.0D, totalDuration - targetDuration);
                     hive.setEffectDurationRemainder(other.getUUID(), effectHolder, nextDurationRem);
@@ -619,7 +619,7 @@ public final class EffectSyncService {
 
                 if (MobEffects.ABSORPTION.equals(effectHolder)) {
                     double totalAbsorb = hive.getAbsorptionRemainder(other.getUUID()) + ((fullAmplifier + 1) * 4.0D * factor);
-                    if (totalAbsorb + HiveMindContext.FRACTIONAL_EPSILON < 1.0D || (!infinite && targetDuration < unitTicks)) {
+                    if (totalAbsorb + HiveMindContexts.FRACTIONAL_EPSILON < 1.0D || (!infinite && targetDuration < unitTicks)) {
                         hive.setAbsorptionRemainder(other.getUUID(), totalAbsorb);
                         if (!infinite && targetDuration >= unitTicks) {
                             hive.setEffectDurationRemainder(other.getUUID(), effectHolder, nextDurationRem + targetDuration);
@@ -627,7 +627,7 @@ public final class EffectSyncService {
                         dirty = true;
                         continue;
                     }
-                    float grantedAbsorption = (float) (totalAbsorb < 1.0D && totalAbsorb + HiveMindContext.FRACTIONAL_EPSILON >= 1.0D ? 1.0D : totalAbsorb);
+                    float grantedAbsorption = (float) (totalAbsorb < 1.0D && totalAbsorb + HiveMindContexts.FRACTIONAL_EPSILON >= 1.0D ? 1.0D : totalAbsorb);
                     hive.setAbsorptionRemainder(other.getUUID(), 0.0D);
                     dirty = true;
                     MobEffectInstance scaled = new MobEffectInstance(
@@ -650,7 +650,7 @@ public final class EffectSyncService {
 
                 if (MobEffects.HEALTH_BOOST.equals(effectHolder)) {
                     double totalBoost = hive.getHealthBoostRemainder(other.getUUID()) + ((fullAmplifier + 1) * 4.0D * factor);
-                    int wholeBoost = Mth.floor(totalBoost + HiveMindContext.FRACTIONAL_EPSILON);
+                    int wholeBoost = Mth.floor(totalBoost + HiveMindContexts.FRACTIONAL_EPSILON);
                     if (wholeBoost < 1 || (!infinite && targetDuration < unitTicks)) {
                         hive.setHealthBoostRemainder(other.getUUID(), totalBoost);
                         if (!infinite && targetDuration >= unitTicks) {

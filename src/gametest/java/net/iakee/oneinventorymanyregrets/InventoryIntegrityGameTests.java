@@ -89,6 +89,8 @@ import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
 import net.minecraft.world.entity.projectile.arrow.Arrow;
 import net.minecraft.world.entity.projectile.arrow.SpectralArrow;
 import net.minecraft.world.entity.projectile.throwableitemprojectile.Snowball;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownEgg;
+import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownExperienceBottle;
 import net.minecraft.world.entity.projectile.throwableitemprojectile.ThrownSplashPotion;
 import net.minecraft.world.entity.projectile.hurtingprojectile.windcharge.WindCharge;
 import net.minecraft.world.inventory.EnchantmentMenu;
@@ -717,6 +719,174 @@ public class InventoryIntegrityGameTests {
 
             helper.succeed();
         } finally {
+            cleanupPlayers(server, alice, bob);
+        }
+    }
+
+    @GameTest
+    public void testAmmoReservationReleasedOnDisconnectDeathAndTeamSwitch(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        ServerScoreboard scoreboard = server.getScoreboard();
+        PlayerTeam redTeam = scoreboard.getPlayerTeam("ammo_switch_red");
+        if (redTeam == null) {
+            redTeam = scoreboard.addPlayerTeam("ammo_switch_red");
+        }
+        ServerPlayer alice = spawnTestPlayer(server, level, "AmmoLeaveAlice");
+        ServerPlayer bob = spawnTestPlayer(server, level, "AmmoStayBob");
+        ServerPlayer aliceSwitch = null;
+        ServerPlayer bobRespawned = null;
+        BlockPos pos = helper.absolutePos(new BlockPos(8, 2, 8));
+        try {
+            HiveMindManager.resetConfigToDefaults(server, alice);
+            alice.teleportTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
+            bob.teleportTo(pos.getX() + 4.5, pos.getY(), pos.getZ() + 0.5);
+            alice.getInventory().setSelectedSlot(0);
+            bob.getInventory().setSelectedSlot(0);
+            alice.getInventory().setItem(0, new ItemStack(Items.BOW));
+            alice.getInventory().setItem(9, new ItemStack(Items.ARROW, 1));
+
+            // 1. Disconnect while drawing -> reserved arrow returns to shared inventory
+            alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(alice.isUsingItem() && bob.getInventory().getItem(9).isEmpty(),
+                "Arrow must be reserved while Alice draws bow before disconnect");
+            server.getPlayerList().remove(alice);
+            alice = null;
+            helper.assertTrue(bob.getInventory().getItem(9).is(Items.ARROW) && bob.getInventory().getItem(9).getCount() == 1,
+                "Disconnecting while drawing must refund reserved arrow to shared inventory");
+
+            // 2. Team switch while drawing -> reserved arrow returns to old hive without leaking to new team
+            aliceSwitch = spawnTestPlayer(server, level, "AmmoSwitchAlice");
+            aliceSwitch.teleportTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
+            aliceSwitch.getInventory().setSelectedSlot(0);
+            aliceSwitch.gameMode.useItem(aliceSwitch, level, aliceSwitch.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(aliceSwitch.isUsingItem() && bob.getInventory().getItem(9).isEmpty(),
+                "Arrow must be reserved before team switch");
+            scoreboard.addPlayerToTeam(aliceSwitch.getScoreboardName(), redTeam);
+            helper.assertFalse(aliceSwitch.isUsingItem(),
+                "Switching teams while drawing must stop active bow use");
+            helper.assertTrue(bob.getInventory().getItem(9).is(Items.ARROW) && bob.getInventory().getItem(9).getCount() == 1,
+                "Team switch during draw must refund reserved arrow to old hive");
+            helper.assertTrue(aliceSwitch.getInventory().getItem(9).isEmpty(),
+                "Reserved arrow must not leak into the new team hive");
+            scoreboard.removePlayerFromTeam(aliceSwitch.getScoreboardName(), redTeam);
+
+            // 3. Death while drawing -> reservation released cleanly without duplication or loss
+            bob.gameMode.useItem(bob, level, bob.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(bob.isUsingItem() && aliceSwitch.getInventory().getItem(9).isEmpty(),
+                "Arrow must be reserved before Bob dies");
+            bob.kill(level);
+            List<ItemEntity> deathDrops = level.getEntitiesOfClass(ItemEntity.class, new AABB(pos).inflate(12.0D));
+            int droppedArrows = deathDrops.stream()
+                .filter(e -> e.getItem().is(Items.ARROW))
+                .mapToInt(e -> e.getItem().getCount())
+                .sum();
+            helper.assertTrue(droppedArrows == 1,
+                "Dying while drawing must release and drop the single reserved arrow once (got " + droppedArrows + ")");
+            deathDrops.forEach(Entity::discard);
+
+            bob.connection.handleClientCommand(new ServerboundClientCommandPacket(ServerboundClientCommandPacket.Action.PERFORM_RESPAWN));
+            bobRespawned = bob.connection.player;
+
+            helper.succeed();
+        } finally {
+            cleanupPlayers(server, alice, aliceSwitch, bobRespawned != null ? bobRespawned : bob);
+            if (scoreboard.getPlayerTeam("ammo_switch_red") != null) {
+                scoreboard.removePlayerTeam(redTeam);
+            }
+            HiveMindData.get(server).removeHive(HiveMindData.TEAM_HIVE_PREFIX + "ammo_switch_red");
+        }
+    }
+
+    @GameTest
+    public void testMoreThrowablesContinuousConsumableAndUseItemOnRace(GameTestHelper helper) {
+        MinecraftServer server = helper.getLevel().getServer();
+        ServerLevel level = helper.getLevel();
+        ServerPlayer alice = spawnTestPlayer(server, level, "ConsumableAlice");
+        ServerPlayer bob = spawnTestPlayer(server, level, "ConsumableBob");
+        BlockPos pos = helper.absolutePos(new BlockPos(10, 2, 10));
+        try {
+            HiveMindManager.resetConfigToDefaults(server, alice);
+            level.setBlockAndUpdate(pos.below(), Blocks.GRASS_BLOCK.defaultBlockState());
+            alice.teleportTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5);
+            bob.teleportTo(pos.getX() + 6.5, pos.getY(), pos.getZ() + 0.5);
+            alice.getInventory().setSelectedSlot(0);
+            bob.getInventory().setSelectedSlot(0);
+
+            // 1. Additional throwables last-item race: Splash Potion, Experience Bottle, Egg
+            ItemStack singleSplash = PotionContents.createItemStack(Items.SPLASH_POTION, net.minecraft.world.item.alchemy.Potions.WATER);
+            alice.getInventory().setItem(0, singleSplash);
+            InteractionResult aSplash = alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            InteractionResult bSplash = bob.gameMode.useItem(bob, level, singleSplash, InteractionHand.MAIN_HAND);
+            helper.assertTrue(aSplash.consumesAction() && !bSplash.consumesAction(),
+                "Only one player may throw the last Splash Potion in the same tick");
+            List<ThrownSplashPotion> splashEntities = level.getEntitiesOfClass(ThrownSplashPotion.class, new AABB(pos).inflate(16.0D));
+            helper.assertTrue(splashEntities.size() == 1,
+                "Last Splash Potion race must spawn 1 entity (got " + splashEntities.size() + ")");
+            splashEntities.forEach(Entity::discard);
+
+            ItemStack singleXpBottle = new ItemStack(Items.EXPERIENCE_BOTTLE, 1);
+            alice.getInventory().setItem(0, singleXpBottle);
+            InteractionResult aXp = alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            InteractionResult bXp = bob.gameMode.useItem(bob, level, singleXpBottle, InteractionHand.MAIN_HAND);
+            helper.assertTrue(aXp.consumesAction() && !bXp.consumesAction(),
+                "Only one player may throw the last Experience Bottle in the same tick");
+            List<ThrownExperienceBottle> xpEntities = level.getEntitiesOfClass(ThrownExperienceBottle.class, new AABB(pos).inflate(16.0D));
+            helper.assertTrue(xpEntities.size() == 1,
+                "Last Experience Bottle race must spawn 1 entity (got " + xpEntities.size() + ")");
+            xpEntities.forEach(Entity::discard);
+
+            ItemStack singleEgg = new ItemStack(Items.EGG, 1);
+            alice.getInventory().setItem(0, singleEgg);
+            InteractionResult aEgg = alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            InteractionResult bEgg = bob.gameMode.useItem(bob, level, singleEgg, InteractionHand.MAIN_HAND);
+            helper.assertTrue(aEgg.consumesAction() && !bEgg.consumesAction(),
+                "Only one player may throw the last Egg in the same tick");
+            List<ThrownEgg> eggEntities = level.getEntitiesOfClass(ThrownEgg.class, new AABB(pos).inflate(16.0D));
+            helper.assertTrue(eggEntities.size() == 1,
+                "Last Egg race must spawn 1 entity (got " + eggEntities.size() + ")");
+            eggEntities.forEach(Entity::discard);
+
+            // 2. Continuous Consumable same-tick completion race (1 Golden Apple)
+            alice.getFoodData().setFoodLevel(10);
+            alice.getFoodData().setSaturation(0.0F);
+            alice.removeAllEffects();
+            bob.removeAllEffects();
+            alice.getInventory().setItem(0, new ItemStack(Items.GOLDEN_APPLE, 1));
+            InteractionResult aEatStart = alice.gameMode.useItem(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND);
+            InteractionResult bEatStart = bob.gameMode.useItem(bob, level, bob.getMainHandItem(), InteractionHand.MAIN_HAND);
+            helper.assertTrue(aEatStart.consumesAction() && bEatStart.consumesAction(),
+                "Both players start eating the shared apple");
+
+            var appleConsumable = alice.getUseItem().get(DataComponents.CONSUMABLE);
+            helper.assertTrue(appleConsumable != null, "Golden apple must have CONSUMABLE component");
+            ItemStack aliceRemaining = appleConsumable.onConsume(level, alice, alice.getUseItem());
+            alice.setItemInHand(InteractionHand.MAIN_HAND, aliceRemaining);
+            alice.stopUsingItem();
+            helper.assertTrue(alice.getInventory().getItem(0).isEmpty() && alice.getFoodData().getFoodLevel() == 14,
+                "Alice finishing the Golden Apple must consume it and gain +4 food (got " + alice.getFoodData().getFoodLevel() + ")");
+
+            // Bob finishes in the same tick on the now-empty/stale shared item -> ConsumableMixin must reject
+            ItemStack staleAppleCopy = new ItemStack(Items.GOLDEN_APPLE, 1);
+            ItemStack bobBlocked = appleConsumable.onConsume(level, bob, staleAppleCopy);
+            helper.assertTrue(bobBlocked.isEmpty() && alice.getFoodData().getFoodLevel() == 14,
+                "Second teammate completing the already-consumed Golden Apple must NOT double-feed or re-consume");
+
+            // 3. useItemOn stale-stack guard vs empty-hand interaction
+            alice.getInventory().setItem(0, new ItemStack(Items.OAK_SAPLING, 1));
+            ItemStack staleSapling = new ItemStack(Items.OAK_SAPLING, 1);
+            BlockHitResult grassHit = new BlockHitResult(Vec3.atCenterOf(pos.below()), Direction.UP, pos.below(), false);
+            InteractionResult aPlace = alice.gameMode.useItemOn(alice, level, alice.getMainHandItem(), InteractionHand.MAIN_HAND, grassHit);
+            InteractionResult bStalePlace = bob.gameMode.useItemOn(bob, level, staleSapling, InteractionHand.MAIN_HAND, grassHit);
+            helper.assertTrue(aPlace.consumesAction() && !bStalePlace.consumesAction(),
+                "useItemOn with a stale non-empty stack after teammate consumed the last item must be rejected");
+            helper.assertTrue(level.getBlockState(pos).is(Blocks.OAK_SAPLING),
+                "First player's sapling placement must succeed");
+
+            helper.succeed();
+        } finally {
+            level.setBlockAndUpdate(pos, Blocks.AIR.defaultBlockState());
+            level.setBlockAndUpdate(pos.below(), Blocks.AIR.defaultBlockState());
             cleanupPlayers(server, alice, bob);
         }
     }

@@ -905,6 +905,68 @@ public class EffectsAndEnvironmentGameTests {
             helper.assertTrue(hive.getAirSupply() > 200,
                 "Water Breathing must allow air refill instead of draining (got " + hive.getAirSupply() + ")");
 
+            // 4. Respiration enchantment still reduces drain under Nx mode
+            alice.removeAllEffects();
+            bob.removeAllEffects();
+            ItemStack respHelmet = new ItemStack(Items.DIAMOND_HELMET);
+            var enchantRegistry = server.registryAccess().lookupOrThrow(Registries.ENCHANTMENT);
+            respHelmet.enchant(enchantRegistry.getOrThrow(Enchantments.RESPIRATION), 3);
+            alice.setItemSlot(EquipmentSlot.HEAD, respHelmet);
+            alice.containerMenu.broadcastChanges();
+            ((HiveLivingEntityAccess) alice).oimr$detectEquipmentUpdates();
+            ((HiveLivingEntityAccess) bob).oimr$detectEquipmentUpdates();
+            hive.setAirSupply(300);
+            int totalAirLostWithResp = 0;
+            for (int t = 0; t < 40; t++) {
+                hive.setAirSupply(300);
+                hive.resetTickClaims();
+                HiveMindManager.onEndServerTick(server);
+                totalAirLostWithResp += (300 - hive.getAirSupply());
+            }
+            helper.assertTrue(totalAirLostWithResp < 80,
+                "Respiration III must reduce Nx air drain below unenchanted 80 air over 40 ticks (lost=" + totalAirLostWithResp + ")");
+            alice.setItemSlot(EquipmentSlot.HEAD, ItemStack.EMPTY);
+
+            // 5. Partial affinity (50%): DROWN damage respects 1x cap vs Nx multiplicative
+            OIMRConfig.setAffinityPercent(50);
+            HiveMindManager.onConfigChanged(server);
+            ServerPlayer charlie = spawnTestPlayer(server, level, "AirCapCharlie");
+            try {
+                OIMRConfig.setUnderwaterBreathMode(OIMRConfig.MultiMemberScalingMode.CAP_1X);
+                alice.setHealth(20.0F);
+                bob.setHealth(20.0F);
+                charlie.setHealth(20.0F);
+                alice.damageCooldownTime = 0;
+                bob.damageCooldownTime = 0;
+                charlie.damageCooldownTime = 0;
+                hive.clearHazardWindows();
+                alice.hurtServer(level, level.damageSources().drown(), 2.0F);
+                bob.hurtServer(level, level.damageSources().drown(), 2.0F);
+                helper.assertTrue(Math.abs(alice.getHealth() - 18.0F) < 0.01F
+                        && Math.abs(bob.getHealth() - 18.0F) < 0.01F
+                        && Math.abs(charlie.getHealth() - 19.0F) < 0.01F,
+                    "1x underwaterBreathMode at 50% affinity must cap DROWN propagation to bystander (expected c=19.0, got c="
+                        + charlie.getHealth() + ")");
+
+                OIMRConfig.setUnderwaterBreathMode(OIMRConfig.MultiMemberScalingMode.MULTIPLICATIVE);
+                alice.setHealth(20.0F);
+                bob.setHealth(20.0F);
+                charlie.setHealth(20.0F);
+                alice.damageCooldownTime = 0;
+                bob.damageCooldownTime = 0;
+                charlie.damageCooldownTime = 0;
+                hive.clearHazardWindows();
+                alice.hurtServer(level, level.damageSources().drown(), 2.0F);
+                bob.hurtServer(level, level.damageSources().drown(), 2.0F);
+                helper.assertTrue(Math.abs(alice.getHealth() - 17.0F) < 0.01F
+                        && Math.abs(bob.getHealth() - 17.0F) < 0.01F
+                        && Math.abs(charlie.getHealth() - 18.0F) < 0.01F,
+                    "Nx underwaterBreathMode at 50% affinity must propagate both DROWN hits (expected a=17, b=17, c=18, got c="
+                        + charlie.getHealth() + ")");
+            } finally {
+                cleanupPlayers(server, charlie);
+            }
+
             helper.succeed();
         } finally {
             level.setBlock(waterPosA, Blocks.AIR.defaultBlockState(), 3);

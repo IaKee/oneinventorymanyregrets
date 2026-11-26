@@ -60,6 +60,20 @@ public class ServerPlayerGameModeMixin implements HiveServerPlayerGameModeAccess
         HiveMindManager.onAfterServerPlayerUseItem(player, hand, cir.getReturnValue());
     }
 
+    @Inject(method = "useItemOn", at = @At("HEAD"), cancellable = true)
+    private void oimr$guardUseItemOn(
+        ServerPlayer player,
+        Level level,
+        ItemStack itemStack,
+        InteractionHand hand,
+        BlockHitResult hitResult,
+        CallbackInfoReturnable<InteractionResult> cir
+    ) {
+        if (HiveMindManager.shouldRejectStaleUseItemOn(player, itemStack, hand)) {
+            cir.setReturnValue(InteractionResult.PASS);
+        }
+    }
+
     @Inject(method = "useItemOn", at = @At("RETURN"))
     private void oimr$afterUseItemOn(
         ServerPlayer player,

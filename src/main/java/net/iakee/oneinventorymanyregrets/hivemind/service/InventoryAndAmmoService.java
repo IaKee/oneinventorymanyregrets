@@ -37,9 +37,9 @@ import java.util.function.Predicate;
  * authoritative ammo reservation, and outbound held-item packet masking/deferral.
  */
 public final class InventoryAndAmmoService {
-    private final HiveMindContext ctx;
+    private final HiveMindContexts.InventoryAmmo ctx;
 
-    public InventoryAndAmmoService(HiveMindContext ctx) {
+    public InventoryAndAmmoService(HiveMindContexts.InventoryAmmo ctx) {
         this.ctx = ctx;
     }
 
@@ -205,7 +205,7 @@ public final class InventoryAndAmmoService {
         String hiveId = this.ctx.getAttachedHiveId(player.getUUID());
         this.ctx.activeAmmoReservations().put(
             player.getUUID(),
-            new HiveMindContext.AmmoReservation(player.getUUID(), hiveId, hand, usedItem.copy(), reserved, sourceSlot)
+            new HiveMindContexts.AmmoReservation(player.getUUID(), hiveId, hand, usedItem.copy(), reserved, sourceSlot)
         );
         broadcastInventoryChanges(player);
     }
@@ -241,7 +241,7 @@ public final class InventoryAndAmmoService {
         if (!this.ctx.isAttached(player) || !player.isUsingItem() || heldWeapon.isEmpty()) {
             return ItemStack.EMPTY;
         }
-        HiveMindContext.AmmoReservation reservation = this.ctx.activeAmmoReservations().get(player.getUUID());
+        HiveMindContexts.AmmoReservation reservation = this.ctx.activeAmmoReservations().get(player.getUUID());
         if (reservation == null || reservation.reservedStack().isEmpty()) {
             return ItemStack.EMPTY;
         }
@@ -260,6 +260,28 @@ public final class InventoryAndAmmoService {
         return itemStack.isEmpty() || currentHand.isEmpty();
     }
 
+    public boolean shouldRejectStaleUseItemOn(ServerPlayer player, ItemStack itemStack, InteractionHand hand) {
+        if (!this.ctx.isAttached(player) || itemStack.isEmpty()) {
+            return false;
+        }
+        ItemStack currentHand = player.getItemInHand(hand);
+        return currentHand.isEmpty() || !ItemStack.isSameItem(currentHand, itemStack);
+    }
+
+    public boolean shouldRejectEmptyOrStaleConsume(ServerPlayer player, ItemStack stack) {
+        if (!this.ctx.isAttached(player) || player.hasInfiniteMaterials()) {
+            return false;
+        }
+        if (stack.isEmpty()) {
+            return true;
+        }
+        if (player.isUsingItem()) {
+            ItemStack currentHand = player.getItemInHand(player.getUsedItemHand());
+            return currentHand.isEmpty() || !ItemStack.isSameItem(currentHand, stack);
+        }
+        return false;
+    }
+
     public void onAfterServerPlayerUseItem(ServerPlayer player, InteractionHand hand, InteractionResult result) {
         if (!this.ctx.isAttached(player) || player.isUsingItem()) {
             return;
@@ -270,7 +292,7 @@ public final class InventoryAndAmmoService {
     }
 
     public boolean releaseAmmoReservation(ServerPlayer player, @Nullable ServerPlayer dropOverride) {
-        HiveMindContext.AmmoReservation reservation = this.ctx.activeAmmoReservations().remove(player.getUUID());
+        HiveMindContexts.AmmoReservation reservation = this.ctx.activeAmmoReservations().remove(player.getUUID());
         if (reservation == null) {
             return false;
         }
@@ -357,7 +379,7 @@ public final class InventoryAndAmmoService {
     }
 
     private ItemStack maskReservedAmmoOutboundStack(ServerPlayer player, int inventorySlot, ItemStack outboundStack) {
-        HiveMindContext.AmmoReservation reservation = this.ctx.activeAmmoReservations().get(player.getUUID());
+        HiveMindContexts.AmmoReservation reservation = this.ctx.activeAmmoReservations().get(player.getUUID());
         if (reservation == null
             || reservation.reservedStack().isEmpty()
             || reservation.sourceSlot() != inventorySlot) {

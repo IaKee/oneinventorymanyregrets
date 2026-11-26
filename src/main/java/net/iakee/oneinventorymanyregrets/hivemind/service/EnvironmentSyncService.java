@@ -25,9 +25,9 @@ import java.util.OptionalInt;
  * Synchronizes air supply, fire, freezing, group respiration, and underwater audio status.
  */
 public final class EnvironmentSyncService {
-    private final HiveMindContext ctx;
+    private final HiveMindContexts.EnvironmentSync ctx;
 
-    public EnvironmentSyncService(HiveMindContext ctx) {
+    public EnvironmentSyncService(HiveMindContexts.EnvironmentSync ctx) {
         this.ctx = ctx;
     }
 

@@ -18,22 +18,31 @@ public final class ClientUnderwaterState {
     private ClientUnderwaterState() {
     }
 
-    public static boolean shouldApplySharedUnderwater(@Nullable LocalPlayer player) {
+    public static boolean isEligiblePlayer(@Nullable LocalPlayer player) {
         return player != null
             && !player.isRemoved()
             && !player.isSpectator()
-            && !player.isDeadOrDying()
+            && !player.isDeadOrDying();
+    }
+
+    static boolean shouldApplySharedUnderwaterForFlags(boolean eligiblePlayer) {
+        return eligiblePlayer
             && ClientBondState.isSynced()
             && ClientBondState.isUnderwaterMuffleEnabled()
             && ClientBondState.isHiveUnderwater();
     }
 
+    static boolean isUnderwaterAudioActiveForFlags(boolean eligiblePlayer, boolean localUnderWater) {
+        return eligiblePlayer && (localUnderWater || shouldApplySharedUnderwaterForFlags(true));
+    }
+
+    public static boolean shouldApplySharedUnderwater(@Nullable LocalPlayer player) {
+        return shouldApplySharedUnderwaterForFlags(isEligiblePlayer(player));
+    }
+
     public static boolean isUnderwaterAudioActive(@Nullable LocalPlayer player) {
-        return player != null
-            && !player.isRemoved()
-            && !player.isSpectator()
-            && !player.isDeadOrDying()
-            && (player.isUnderWater() || shouldApplySharedUnderwater(player));
+        return isEligiblePlayer(player)
+            && isUnderwaterAudioActiveForFlags(true, player.isUnderWater());
     }
 
     public static UnderLiquidAmbientSoundInstance createLoopSound(LocalPlayer player) {

@@ -94,14 +94,17 @@ O arquivo é criado em `config/oneinventorymanyregrets.properties`. No cliente, 
 | `sharedPortals` | `true` | compartilha portais |
 | `underwaterMuffle` | `true` | sincroniza o abafamento subaquático |
 | `sharedMobSounds` | `true` | replica sons de criaturas para o grupo |
+| `sharedMobSoundFilter` | `all` | filtra canais propagados (`all`, `hostile`, `neutral`, `none`) |
+| `sharedMobSoundVolume` | `100` | escala de volume (`0`–`100%`) dos sons replicados antes da Afinidade |
 | `friendlyPets` | `true` | evita hostilidade entre pets aliados |
 | `excludeCreativeFromDeath` | `true` | exclui criativos da cascata de morte |
 | `wipeCreativeInventoryOnDeath` | `true` | controla limpeza de inventário criativo na morte coletiva |
 | `randomDeathLoot` | `true` | sorteia entre os mortos o local dos drops da morte coletiva |
 | `lavaDamageMode` | `1x` | controla dano de lava com múltiplos membros (`1x` cap ou `nx` multiplicativo) |
 | `underwaterBreathMode` | `1x` | controla gasto de fôlego subaquático com múltiplos membros (`1x` cap ou `nx` multiplicativo) |
-| `dotDamageMode` | `1x` | controla danos contínuos (fogo, poison, wither, congelamento, cacto, bagas) entre múltiplos membros (`1x` cap ou `nx` multiplicativo) |
+| `dotDamageMode` | `1x` | controla danos contínuos (fogo, poison, wither, congelamento, cacto, bagas, bafo do dragão) entre múltiplos membros (`1x` cap ou `nx` multiplicativo) |
 | `comunism` | `false` | usa uma mensagem humorística coletiva ao morrer de fome |
+| `syncEffects` | `true` | sincroniza efeitos de status com duração entre os membros do grupo |
 | `syncHotbar` | `true` | sincroniza a hotbar |
 | `syncMainHand` | `true` | sincroniza a mão principal quando a hotbar não força essa sincronização |
 | `syncOffHand` | `true` | sincroniza a mão secundária |
@@ -110,7 +113,7 @@ O arquivo é criado em `config/oneinventorymanyregrets.properties`. No cliente, 
 | `syncLeggings` | `true` | sincroniza calças |
 | `syncBoots` | `true` | sincroniza botas |
 
-> **Aviso importante:** o próprio código identifica que desativar a sincronização de hotbar/equipamentos pode causar duplicação ativa de itens ao entrar, trocar de equipe ou mover itens. Mantenha todas as sincronizações ligadas em mundos importantes até esse comportamento ser redesenhado.
+> **Observação sobre desligamento de slots em runtime:** ao desativar a sincronização de qualquer slot da hotbar ou de equipamento em tempo real, o servidor cancela usos ativos da mão afetada, remove o item atualmente compartilhado e o dropa no mundo (junto ao operador ou membro prioritário do grupo, ou na fila do próximo login se o grupo estiver offline) antes de liberar os slots individuais — evitando duplicação entre integrantes.
 
 ### Efeitos replicados em afinidade parcial (`0% < affinity < 100%`)
 
@@ -160,7 +163,7 @@ node scripts/validate-translations.mjs
 ./gradlew runClientGameTest
 ```
 
-No Linux, o CI executa o último comando com `xvfb-run` e renderização por software. O teste de cliente abre `OIMRSettingsScreen` em 640×360, verifica título narrável e limites dos widgets. Ele é uma barreira de fumaça, não substitui o roteiro manual de tela, TAB, áudio e multiplayer em [docs/MANUAL_TEST_CHECKLIST.md](docs/MANUAL_TEST_CHECKLIST.md).
+No Linux, o CI executa o último comando com `xvfb-run` e renderização por software. O teste de cliente abre `OIMRSettingsScreen` em 640×360, verifica título narrável, acoplamento dos controles (`syncHotbar`/`MainHand`, `excludeCreative`/`wipeCreative`, `sharedMobSounds`/filtro/volume), rolagem, rodapé e defaults seguros de estado do cliente. Ele complementa os testes unitários e não substitui o roteiro manual de tela, HUD, TAB, áudio e multiplayer em [docs/MANUAL_TEST_CHECKLIST.md](docs/MANUAL_TEST_CHECKLIST.md).
 
 Artefatos esperados:
 
@@ -183,9 +186,9 @@ Confirme exatamente as versões da tabela acima e teste sem outros mods além de
 
 Edite `config/oneinventorymanyregrets.properties` e execute `/oimr settings reload` pelo console/RCON. O comando de jogador é deliberadamente bloqueado em servidor dedicado, inclusive para operadores.
 
-### Itens duplicaram ou mudaram após troca de equipe
+### Itens mudaram ou foram dropados após desligar `sync*` ou trocar de equipe
 
-Restaure um backup se necessário e reative todas as opções `sync*`. Esse risco é conhecido e ainda bloqueia a recomendação do mod para mundos de produção.
+Ao desativar `syncHotbar`, `syncMainHand`, `syncOffHand` ou slots de armadura em runtime, o mod dropa no chão os itens atualmente compartilhados daqueles slots antes de reativar o armazenamento individual por jogador. Ao trocar de equipe (`/team`), o inventário compartilhado anterior permanece na equipe de origem e o jogador passa a usar o estado da equipe de destino (e qualquer munição reservada em *draw* é devolvida ao grupo anterior).
 
 ### Texto em inglês em outro idioma
 
@@ -193,21 +196,21 @@ Releases incluem somente `en_us` e `pt_br`, os dois idiomas oficialmente suporta
 
 ## Limitações conhecidas
 
-- a cobertura automatizada de cliente é somente um teste de fumaça da tela de opções; TAB, áudio e variações visuais ainda exigem validação manual;
+- a cobertura automatizada de cliente valida a tela de opções (`OIMRSettingsScreen` em 640×360, acoplamento de controles e rodapé) e estados puros de cliente em JUnit; HUD, TAB, áudio e variações visuais ainda exigem validação manual;
 - clientes vanilla e combinações com outros mods ainda não foram validados;
 - os 143 rascunhos de idioma gerados por IA não são distribuídos e ainda precisam de revisão/procedência para futura promoção;
 - a autoria/origem dos PNGs está inventariada, mas aguarda declaração explícita do titular;
-- hives e inventários pessoais persistidos não são expurgados automaticamente;
+- hives e inventários pessoais persistidos não são expurgados automaticamente (o expurgo é manual via `/oimr cleanup dry-run|confirm`);
 - a homepage declarada nos metadados (`iakee.online`) não resolveu em DNS durante esta auditoria;
 - não há screenshots finais, changelog, notas de versão nem automação de publicação;
 - o ícone atual é um PNG 256×256 com fundo branco e lettering manual; sua adequação visual à loja ainda precisa de decisão do autor.
 
 ## Roadmap resumido
 
-1. Eliminar a duplicação de itens ou remover da versão pública as combinações inseguras de sincronização.
-2. Obter revisão humana antes de promover qualquer idioma experimental.
-3. Expandir testes de cliente e executar multiplayer real, cliente sem mod e matriz de mods populares.
-4. Medir desempenho com grupos maiores e implementar limpeza de hives/estados órfãos.
+1. Concluir a declaração de titularidade/procedência dos PNGs em [ASSET_PROVENANCE.md](ASSET_PROVENANCE.md).
+2. Executar a matriz manual de cliente, áudio e multiplayer real ([docs/MANUAL_TEST_CHECKLIST.md](docs/MANUAL_TEST_CHECKLIST.md)) e validar compatibilidade com cliente vanilla/mods populares.
+3. Obter revisão humana antes de promover qualquer idioma experimental.
+4. Perfilar desempenho com grupos maiores (10–50 jogadores) e concluir a decomposição SOLID de `HiveMind`/`OIMRConfig`.
 5. Produzir screenshots, ícone final, changelog e pipeline de release reproduzível.
 
 O backlog completo, com prioridade, evidência e esforço, está em [TECHNICAL_DEBT.md](TECHNICAL_DEBT.md).
@@ -239,7 +242,7 @@ Essa declaração não relicencia componentes de terceiros. Os scripts e o wrapp
 ## Checklist de publicação
 
 - [x] Build reproduzido localmente com Java 25.
-- [x] 60 GameTests obrigatórios e 15 testes JUnit aprovados.
+- [x] 62 GameTests obrigatórios, 22 testes JUnit e 1 Client GameTest aprovados.
 - [x] README de pré-publicação criado.
 - [x] `LICENSE` e `fabric.mod.json` alinhados para MIT no conteúdo próprio.
 - [x] URL do código-fonte verificada.

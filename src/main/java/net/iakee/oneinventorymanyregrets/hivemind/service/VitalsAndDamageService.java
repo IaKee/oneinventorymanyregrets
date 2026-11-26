@@ -32,9 +32,9 @@ import java.util.UUID;
  * multi-member hazard caps (lava/drown/DoT), hunger scaling, peaceful regen, and knockback.
  */
 public final class VitalsAndDamageService {
-    private final HiveMindContext ctx;
+    private final HiveMindContexts.VitalsDamage ctx;
 
-    public VitalsAndDamageService(HiveMindContext ctx) {
+    public VitalsAndDamageService(HiveMindContexts.VitalsDamage ctx) {
         this.ctx = ctx;
     }
 
@@ -161,6 +161,9 @@ public final class VitalsAndDamageService {
         if (source.is(DamageTypes.SWEET_BERRY_BUSH)) {
             return HiveMind.HazardCapCategory.SWEET_BERRY_BUSH;
         }
+        if (source.is(DamageTypes.DRAGON_BREATH)) {
+            return HiveMind.HazardCapCategory.DRAGON_BREATH;
+        }
         Holder<MobEffect> activeDot = this.ctx.getActivePeriodicDotEffect();
         if (source.is(DamageTypes.MAGIC)
             && activeDot != null
@@ -200,7 +203,7 @@ public final class VitalsAndDamageService {
         }
         if (!player.getUUID().equals(window.getPrimarySourcePlayer())) {
             float alreadyShared = window.getSharedDamageReceived(player.getUUID());
-            return alreadyShared > 0.0F && damage <= alreadyShared + HiveMindContext.FRACTIONAL_EPSILON;
+            return alreadyShared > 0.0F && damage <= alreadyShared + HiveMindContexts.FRACTIONAL_EPSILON;
         }
         return false;
     }
@@ -385,13 +388,13 @@ public final class VitalsAndDamageService {
                     continue;
                 }
                 double totalHeal = hive.getHealRemainder(other.getUUID()) + sharedHeal;
-                if (totalHeal + HiveMindContext.FRACTIONAL_EPSILON < 1.0D
-                    && totalHeal + HiveMindContext.FRACTIONAL_EPSILON < missingHealth) {
+                if (totalHeal + HiveMindContexts.FRACTIONAL_EPSILON < 1.0D
+                    && totalHeal + HiveMindContexts.FRACTIONAL_EPSILON < missingHealth) {
                     hive.setHealRemainder(other.getUUID(), totalHeal);
                     dirty = true;
                     continue;
                 }
-                float appliedHeal = (float) (totalHeal < 1.0D && totalHeal + HiveMindContext.FRACTIONAL_EPSILON >= 1.0D ? 1.0D : totalHeal);
+                float appliedHeal = (float) (totalHeal < 1.0D && totalHeal + HiveMindContexts.FRACTIONAL_EPSILON >= 1.0D ? 1.0D : totalHeal);
                 hive.setHealRemainder(other.getUUID(), 0.0D);
                 dirty = true;
                 float nextHealth = Math.min(other.getMaxHealth(), other.getHealth() + appliedHeal);
@@ -512,14 +515,14 @@ public final class VitalsAndDamageService {
                 double totalDamage = hive.getDamageRemainder(other.getUUID()) + sharedDamage;
                 recordPendingDamageSource(other.getUUID(), source, sharedDamage);
                 double effectiveHp = other.getHealth() + other.getAbsorptionAmount();
-                if (totalDamage + HiveMindContext.FRACTIONAL_EPSILON < 1.0D
-                    && totalDamage + HiveMindContext.FRACTIONAL_EPSILON < effectiveHp) {
+                if (totalDamage + HiveMindContexts.FRACTIONAL_EPSILON < 1.0D
+                    && totalDamage + HiveMindContexts.FRACTIONAL_EPSILON < effectiveHp) {
                     hive.setDamageRemainder(other.getUUID(), totalDamage);
                     dirty = true;
                     continue;
                 }
 
-                float appliedDamage = (float) (totalDamage < 1.0D && totalDamage + HiveMindContext.FRACTIONAL_EPSILON >= 1.0D ? 1.0D : totalDamage);
+                float appliedDamage = (float) (totalDamage < 1.0D && totalDamage + HiveMindContexts.FRACTIONAL_EPSILON >= 1.0D ? 1.0D : totalDamage);
                 hive.setDamageRemainder(other.getUUID(), 0.0D);
                 dirty = true;
                 DamageSource resolvedSource = resolvePendingDamageSource(other.getUUID(), source);
@@ -702,16 +705,16 @@ public final class VitalsAndDamageService {
         if (amount <= 0.0D) {
             return;
         }
-        List<HiveMindContext.PendingDamageContribution> list = this.ctx.pendingDamageSources()
+        List<HiveMindContexts.PendingDamageContribution> list = this.ctx.pendingDamageSources()
             .computeIfAbsent(recipientUuid, ignored -> new ArrayList<>());
         for (int i = 0; i < list.size(); i++) {
-            HiveMindContext.PendingDamageContribution entry = list.get(i);
+            HiveMindContexts.PendingDamageContribution entry = list.get(i);
             if (sameDamageOrigin(entry.source(), source)) {
-                list.set(i, new HiveMindContext.PendingDamageContribution(source, entry.amount() + amount));
+                list.set(i, new HiveMindContexts.PendingDamageContribution(source, entry.amount() + amount));
                 return;
             }
         }
-        list.add(new HiveMindContext.PendingDamageContribution(source, amount));
+        list.add(new HiveMindContexts.PendingDamageContribution(source, amount));
     }
 
     private static boolean sameDamageOrigin(DamageSource a, DamageSource b) {
@@ -721,15 +724,15 @@ public final class VitalsAndDamageService {
     }
 
     private DamageSource resolvePendingDamageSource(UUID recipientUuid, DamageSource fallback) {
-        List<HiveMindContext.PendingDamageContribution> list = this.ctx.pendingDamageSources().remove(recipientUuid);
+        List<HiveMindContexts.PendingDamageContribution> list = this.ctx.pendingDamageSources().remove(recipientUuid);
         if (list == null || list.isEmpty()) {
             return fallback;
         }
-        HiveMindContext.PendingDamageContribution best = list.getLast();
-        for (HiveMindContext.PendingDamageContribution entry : list) {
-            if (entry.amount() > best.amount() + HiveMindContext.FRACTIONAL_EPSILON) {
+        HiveMindContexts.PendingDamageContribution best = list.getLast();
+        for (HiveMindContexts.PendingDamageContribution entry : list) {
+            if (entry.amount() > best.amount() + HiveMindContexts.FRACTIONAL_EPSILON) {
                 best = entry;
-            } else if (Math.abs(entry.amount() - best.amount()) <= HiveMindContext.FRACTIONAL_EPSILON
+            } else if (Math.abs(entry.amount() - best.amount()) <= HiveMindContexts.FRACTIONAL_EPSILON
                 && entry.source().getEntity() != null
                 && best.source().getEntity() == null) {
                 best = entry;

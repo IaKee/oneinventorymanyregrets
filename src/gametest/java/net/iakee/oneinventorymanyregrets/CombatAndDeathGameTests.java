@@ -1493,6 +1493,89 @@ public class CombatAndDeathGameTests {
             helper.assertTrue(Math.abs(alice.getHealth() - 11.0F) < 0.01F,
                 "Regeneration must remain capped at 1x even in Nx DoT mode (got " + alice.getHealth() + ")");
 
+            // 3. Dragon Breath respects dotDamageMode 1x cap vs Nx multiplicative
+            OIMRConfig.setDotDamageMode(OIMRConfig.MultiMemberScalingMode.CAP_1X);
+            alice.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            bob.damageCooldownTime = 0;
+            charlie.damageCooldownTime = 0;
+            hive.clearHazardWindows();
+            alice.hurtServer(level, level.damageSources().dragonBreath(), 2.0F);
+            bob.hurtServer(level, level.damageSources().dragonBreath(), 2.0F);
+            charlie.hurtServer(level, level.damageSources().dragonBreath(), 2.0F);
+            helper.assertTrue(Math.abs(alice.getHealth() - 18.0F) < 0.01F,
+                "1x DoT cap must limit 3 simultaneous dragon breath hits to 2.0 damage (got " + alice.getHealth() + ")");
+
+            OIMRConfig.setDotDamageMode(OIMRConfig.MultiMemberScalingMode.MULTIPLICATIVE);
+            alice.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            bob.damageCooldownTime = 0;
+            charlie.damageCooldownTime = 0;
+            hive.clearHazardWindows();
+            alice.hurtServer(level, level.damageSources().dragonBreath(), 2.0F);
+            bob.hurtServer(level, level.damageSources().dragonBreath(), 2.0F);
+            charlie.hurtServer(level, level.damageSources().dragonBreath(), 2.0F);
+            helper.assertTrue(Math.abs(alice.getHealth() - 14.0F) < 0.01F,
+                "Nx DoT mode must propagate 3 simultaneous dragon breath hits (6.0 damage, got " + alice.getHealth() + ")");
+
+            // 4. Partial affinity (50%): DoT cap 1x vs Nx for Poison and Freeze
+            OIMRConfig.setAffinityPercent(50);
+            HiveMindManager.onConfigChanged(server);
+            OIMRConfig.setDotDamageMode(OIMRConfig.MultiMemberScalingMode.CAP_1X);
+            alice.removeAllEffects();
+            bob.removeAllEffects();
+            charlie.removeAllEffects();
+            alice.setHealth(20.0F);
+            bob.setHealth(20.0F);
+            charlie.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            bob.damageCooldownTime = 0;
+            charlie.damageCooldownTime = 0;
+            hive.clearHazardWindows();
+            alice.hurtServer(level, level.damageSources().freeze(), 2.0F);
+            bob.hurtServer(level, level.damageSources().freeze(), 2.0F);
+            helper.assertTrue(Math.abs(alice.getHealth() - 18.0F) < 0.01F
+                    && Math.abs(bob.getHealth() - 18.0F) < 0.01F
+                    && Math.abs(charlie.getHealth() - 19.0F) < 0.01F,
+                "1x DoT cap at 50% affinity must cap freeze propagation to bystander Charlie (expected c=19.0, got c="
+                    + charlie.getHealth() + ")");
+
+            alice.setHealth(20.0F);
+            bob.setHealth(20.0F);
+            charlie.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            bob.damageCooldownTime = 0;
+            charlie.damageCooldownTime = 0;
+            alice.addEffect(new MobEffectInstance(MobEffects.POISON, 200, 0));
+            bob.addEffect(new MobEffectInstance(MobEffects.POISON, 200, 0));
+            aPoison = alice.getEffect(MobEffects.POISON);
+            bPoison = bob.getEffect(MobEffects.POISON);
+            for (int i = 0; i < 25; i++) {
+                aPoison.tickServer(level, alice, () -> {});
+                bPoison.tickServer(level, bob, () -> {});
+            }
+            helper.assertTrue(Math.abs(alice.getHealth() - 19.0F) < 0.01F
+                    && Math.abs(bob.getHealth() - 19.0F) < 0.01F
+                    && Math.abs(charlie.getHealth() - 20.0F) < 0.01F,
+                "1x DoT cap at 50% affinity must suppress periodic Poison cascade without hurting bystander (got a="
+                    + alice.getHealth() + ", b=" + bob.getHealth() + ", c=" + charlie.getHealth() + ")");
+
+            OIMRConfig.setDotDamageMode(OIMRConfig.MultiMemberScalingMode.MULTIPLICATIVE);
+            alice.setHealth(20.0F);
+            bob.setHealth(20.0F);
+            charlie.setHealth(20.0F);
+            alice.damageCooldownTime = 0;
+            bob.damageCooldownTime = 0;
+            charlie.damageCooldownTime = 0;
+            hive.clearHazardWindows();
+            alice.hurtServer(level, level.damageSources().freeze(), 2.0F);
+            bob.hurtServer(level, level.damageSources().freeze(), 2.0F);
+            helper.assertTrue(Math.abs(alice.getHealth() - 17.0F) < 0.01F
+                    && Math.abs(bob.getHealth() - 17.0F) < 0.01F
+                    && Math.abs(charlie.getHealth() - 18.0F) < 0.01F,
+                "Nx DoT mode at 50% affinity must propagate both freeze hits (expected c=18.0, got c="
+                    + charlie.getHealth() + ")");
+
             helper.succeed();
         } finally {
             OIMRConfig.setAffinityPercent(prevAffinity);

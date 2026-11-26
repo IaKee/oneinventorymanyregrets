@@ -24,9 +24,9 @@ import java.util.concurrent.ThreadLocalRandom;
  * Coordinates shared Ender Pearl / Portal teleports and replicated directional mob sounds.
  */
 public final class TeleportAndAudioService {
-    private final HiveMindContext ctx;
+    private final HiveMindContexts.TeleportAudio ctx;
 
-    public TeleportAndAudioService(HiveMindContext ctx) {
+    public TeleportAndAudioService(HiveMindContexts.TeleportAudio ctx) {
         this.ctx = ctx;
     }
 
@@ -250,7 +250,7 @@ public final class TeleportAndAudioService {
             if (closestOriginalListener == null || recipients == null || recipients.isEmpty()) {
                 continue;
             }
-            if (!this.ctx.recentMobSounds().add(new HiveMindContext.MobSoundDedupKey(hiveId, sound.value(), source, seed))) {
+            if (!this.ctx.recentMobSounds().add(new HiveMindContexts.MobSoundDedupKey(hiveId, sound.value(), source, seed))) {
                 continue;
             }
             if (ThreadLocalRandom.current().nextInt(groupSize) != 0) {

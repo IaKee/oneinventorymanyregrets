@@ -79,9 +79,9 @@ public final class DeathCascadeService {
         Map.entry(DamageTypes.SULFUR_CUBE_HOT, "death.oimr.sulfur_cube_hot")
     );
 
-    private final HiveMindContext ctx;
+    private final HiveMindContexts.DeathCascade ctx;
 
-    public DeathCascadeService(HiveMindContext ctx) {
+    public DeathCascadeService(HiveMindContexts.DeathCascade ctx) {
         this.ctx = ctx;
     }
 
@@ -306,7 +306,7 @@ public final class DeathCascadeService {
         }
 
         this.ctx.lastHiveDeathMessages().put(victim.getUUID(), result);
-        this.ctx.capturedDeathContexts().put(victim.getUUID(), new HiveMindContext.CapturedDeathContext(result, secondary, OIMRConfig.isFullAffinity()));
+        this.ctx.capturedDeathContexts().put(victim.getUUID(), new HiveMindContexts.CapturedDeathContext(result, secondary, OIMRConfig.isFullAffinity()));
         return result;
     }
 
@@ -338,7 +338,7 @@ public final class DeathCascadeService {
         if (this.ctx.isCascadingDeath() || !(entity instanceof ServerPlayer victim) || !this.ctx.isAttached(victim)) {
             return;
         }
-        this.ctx.capturedDeathContexts().put(victim.getUUID(), new HiveMindContext.CapturedDeathContext(deathMessage, secondaryEntity, false));
+        this.ctx.capturedDeathContexts().put(victim.getUUID(), new HiveMindContexts.CapturedDeathContext(deathMessage, secondaryEntity, false));
     }
 
     private Component buildTeammateDeathMessage(
@@ -346,7 +346,7 @@ public final class DeathCascadeService {
         ServerPlayer victim,
         String hiveId,
         DamageSource source,
-        HiveMindContext.@Nullable CapturedDeathContext captured
+        HiveMindContexts.@Nullable CapturedDeathContext captured
     ) {
         Component otherName = other.getDisplayName();
         Component victimName = victim.getDisplayName();
@@ -427,7 +427,7 @@ public final class DeathCascadeService {
             return;
         }
         ServerPlayer chosenLootTarget = this.ctx.activeDeathLootTargets().remove(victim.getUUID());
-        HiveMindContext.CapturedDeathContext captured = this.ctx.capturedDeathContexts().remove(victim.getUUID());
+        HiveMindContexts.CapturedDeathContext captured = this.ctx.capturedDeathContexts().remove(victim.getUUID());
         boolean keepInventory = victim.level().getGameRules().get(GameRules.KEEP_INVENTORY);
         boolean preserveForCreative = !keepInventory && shouldSuppressDeathInventoryDrop(victim);
         String hiveId = this.ctx.getAttachedHiveId(victim.getUUID());

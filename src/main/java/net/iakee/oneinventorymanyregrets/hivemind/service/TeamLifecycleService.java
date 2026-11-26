@@ -48,9 +48,9 @@ public final class TeamLifecycleService {
     public static final int DEFAULT_ORPHAN_RETENTION_DAYS = 0;
     public static final int DEFAULT_INACTIVE_RETENTION_DAYS = 30;
 
-    private final HiveMindContext ctx;
+    private final HiveMindContexts.TeamLifecycle ctx;
 
-    public TeamLifecycleService(HiveMindContext ctx) {
+    public TeamLifecycleService(HiveMindContexts.TeamLifecycle ctx) {
         this.ctx = ctx;
     }
 

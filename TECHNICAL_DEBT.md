@@ -12,20 +12,17 @@ Auditoria executada em **25/11/2026** sobre o checkout local de `OneInventoryMan
 
 ## Resumo executivo
 
-O estado atual **compila e passa 60 GameTests obrigatórios, 15 testes JUnit e um Client GameTest** quando o Gradle roda em Java 25. A primeira tentativa histórica com Java 21 falhou ainda na configuração do Loom. Não foram encontrados segredos óbvios, `TODO`, `FIXME`, `HACK`, stubs ou stack traces de depuração nos fontes auditados.
+O estado atual **compila e passa 62 GameTests obrigatórios, 22 testes JUnit e 1 Client GameTest** quando o Gradle roda em Java 25. A primeira tentativa histórica com Java 21 falhou ainda na configuração do Loom. Não foram encontrados segredos óbvios, `TODO`, `FIXME`, `HACK`, stubs ou stack traces de depuração nos fontes auditados.
 
 Mesmo assim, o checkout não está pronto para loja. O Epic 4 passou a excluir do JAR os 143 rascunhos de tradução sem procedência, adicionou validação de idiomas, testes unitários, um Client GameTest em Xvfb e roteiro manual. Ainda faltam a declaração de autoria/origem dos PNGs, a execução da matriz manual, o link de homepage, materiais de loja e medições de compatibilidade/desempenho.
 
 ## Fatos confirmados — obrigatórios antes da publicação
 
-### TD-001 — Opções de slot podem duplicar itens
+### TD-001 — Opções de slot podiam duplicar itens (resolvido em runtime via drop canônico)
 
-- **Prioridade/severidade:** P0 / crítica.
-- **Evidência:** `src/main/java/net/iakee/oneinventorymanyregrets/config/OIMRConfig.java:238-240` grava no próprio arquivo de configuração que desativar `syncHotbar`, `syncMainHand`, `syncOffHand` ou slots de armadura pode causar duplicação ativa; `src/main/resources/assets/oneinventorymanyregrets/lang/en_us.json:89-90` apresenta o mesmo comportamento como planejado. As opções ficam expostas na UI em `OIMRSettingsScreen.java:78-130`.
-- **Impacto:** quebra economia e confiança do mundo, pode ser explorado e pode causar perda de estado ao entrar ou trocar de equipe. É incompatível com uma recomendação para servidores/mundos de produção.
-- **Esforço:** G.
-- **Dependências:** definir semântica de migração entre inventário compartilhado e pessoal; cobrir entrada, saída, troca de equipe, morte, respawn, contêiner aberto e jogadores offline.
-- **Recomendação:** impedir combinações inseguras na versão pública ou implementar transferência transacional sem clonagem. Criar GameTests de propriedade/conservação de itens e testar upgrades de saves. Até lá, manter todas as opções `sync*` ativadas e exibir o aviso na página da loja.
+- **Prioridade/severidade:** P0 / crítica (resolvido no código).
+- **Estado em 26/11/2026:** `InventoryAndAmmoService.prepareSlotSyncTransition` cancela usos ativos na mão afetada, remove atomicamente os itens compartilhados do hive e os dropa no mundo (junto ao jogador iniciador, membro prioritário ou fila `pendingSyncDrops` em hives offline) antes de alternar para armazenamento individual. Os avisos em `OIMRConfig.java:640` e `en_us.json:89-90` foram atualizados, e `InventoryIntegrityGameTests` cobre conservação sem duplicação.
+- **Residual menor:** ao desativar `syncEffects` em runtime, `TeamLifecycleService.onConfigChanged` limpa `hive.getEffects()`, remainders e efeitos replicados, enquanto buffs vanilla já aplicados nos membros expiram naturalmente.
 
 ### TD-002 — Traduções experimentais sem procedência e com cobertura incompleta (mitigado para releases)
 
@@ -48,11 +45,11 @@ Mesmo assim, o checkout não está pronto para loja. O Epic 4 passou a excluir d
 ### TD-004 — Cobertura automatizada de cliente ainda é parcial
 
 - **Prioridade/severidade:** P1 / alta.
-- **Evidência atual:** `enableClientGameTests = true`; o CI executa `runClientGameTest` em Xvfb e há testes JUnit em `src/test`. O teste de cliente cobre abertura da tela em 640×360, título e limites diretos de widgets. TAB, áudio, narrador, multiplayer e compatibilidade vanilla continuam no roteiro manual.
+- **Evidência atual:** `enableClientGameTests = true`; o CI executa `runClientGameTest` em Xvfb e há testes unitários JUnit em `src/test/.../client/` (`ClientBondStateTest`, `ClientHudFeedStateTest`, `ClientUnderwaterStateTest`). `OIMRClientGameTests` valida abertura da `OIMRSettingsScreen` em 640×360, título, acoplamento de controles (`syncHotbar`/`MainHand`, `excludeCreative`/`wipeCreative`, `sharedMobSounds`/filtro/volume), rolagem e limites do rodapé. HUD, TAB, áudio real, narrador, multiplayer e compatibilidade vanilla continuam no roteiro manual.
 - **Impacto:** regressões visuais, narrador/teclado, resoluções menores, payloads, desconexão e áudio podem chegar à loja apesar do build verde.
 - **Esforço:** M/G.
 - **Dependências:** infraestrutura de Client GameTest ou testes manuais reproduzíveis; capturas de referência.
-- **Estado em 26/11/2026:** infraestrutura e roteiro `docs/MANUAL_TEST_CHECKLIST.md` adicionados. Próximo passo: ampliar automação de TAB/áudio e executar a matriz real antes da release.
+- **Estado em 26/11/2026:** infraestrutura, testes unitários de estado do cliente, teste de acoplamento da tela e roteiro `docs/MANUAL_TEST_CHECKLIST.md` adicionados. Próximo passo: ampliar automação de TAB/HUD e executar a matriz real antes da release.
 
 ### TD-005 — Não há pacote de loja nem processo de release
 
@@ -74,32 +71,26 @@ Mesmo assim, o checkout não está pronto para loja. O Epic 4 passou a excluir d
 
 ## Fatos confirmados — engenharia e operação
 
-### TD-007 — Estados persistentes de equipes/jogadores não são expurgados
+### TD-007 — Estados persistentes de equipes/jogadores órfãos (mitigado via `/oimr cleanup`)
 
-- **Prioridade/severidade:** P2 / média.
-- **Evidência:** `HiveMindData.java:38-39` mantém mapas de hives e inventários pessoais; `getOrCreate`/`getOrCreatePersonalState` adicionam entradas em `HiveMindData.java:66-85`. Existe `removePersonalState` em `HiveMindData.java:88-92`, mas a busca global não encontra chamadas. Não existe remoção de hives. `HiveMindManager.java:973` percorre todos os hives a cada tick.
-- **Impacto:** saves crescem com jogadores/equipes históricas; recriar uma equipe com o mesmo nome pode herdar estado antigo; custo do tick cresce com hives órfãos.
-- **Esforço:** M/G.
-- **Dependências:** política de retenção, identificação segura de equipe extinta, migração/backup de save.
-- **Recomendação:** registrar última atividade, criar comando de inspeção/limpeza com dry-run e expurgar somente após backup e período de retenção. Testar recriação/renomeação de equipe.
+- **Prioridade/severidade:** P2 / média (mitigado).
+- **Estado em 26/11/2026:** `BL-009` implementou metadados de última atividade (`lastActiveEpoch` / `lastActiveGameTime`), marcação e limpeza de equipes órfãs na remoção/recriação (`onTeamRemoved` / `onTeamAdded`), remoção automática de `PersonalInventoryState` vazio no `onPlayerLeave`, política de retenção (`TeamLifecycleService.CleanupPolicy` + `CleanupPolicyTest`) e comando `/oimr cleanup dry-run|confirm [dias]`. Além disso, `HiveMindCoordinator.onlineMembersByHive` eliminou a iteração sobre hives ociosos no tick.
+- **Residual:** não há expurgo automático periódico agendado nem geração automática de backup antes de `/oimr cleanup confirm` (`P3`).
 
-### TD-008 — Sincronização por tick tem custo amplo e ainda não foi perfilada
+### TD-008 — Sincronização por tick ainda não foi perfilada em carga alta
 
 - **Prioridade/severidade:** P2 / média, potencialmente alta em servidores grandes.
-- **Evidência:** `HiveMindManager.java:945-1005` sincroniza equipes, percorre hives/membros e chama `broadcastChanges`, detecção de equipamento e `flushDirty` de avanços a cada tick. `getOnlineMembers` percorre toda a lista de jogadores (`HiveMindManager.java:306-313`) e é chamado repetidamente. Durante a auditoria original o servidor registrou `Can't keep up! ... 4569ms or 91 ticks behind`; o lote atual executa 60 GameTests.
-- **Impacto:** custo quadrático em alguns padrões de número de hives/jogadores e tráfego de inventário/progressão desnecessário. O aviso de GameTest é um sinal, não prova de lag em gameplay real.
-- **Esforço:** G.
+- **Evidência atual:** `TeamLifecycleService.onEndServerTick` agora itera apenas `getActiveHiveIds()` via índice `onlineMembersByHive` (eliminando custo com hives ociosos), mas ainda executa `broadcastChanges`, `oimr$detectEquipmentUpdates` e `flushDirty` por membro online a cada tick.
+- **Impacto:** tráfego de inventário/progressão e custo por tick ainda não foram medidos em cenários de 10–50 jogadores simultâneos.
+- **Esforço:** M/G.
 - **Dependências:** profiler (JFR/spark), cenários de 2/10/50 jogadores, métricas de pacotes e saves reais.
-- **Recomendação:** perfilar antes de otimizar; indexar membros por hive, sincronizar por dirty flags/eventos e reduzir flush/broadcast por tick. Adicionar orçamento de desempenho em teste.
+- **Recomendação:** perfilar antes de otimizar; migrar `broadcastChanges`/flush de avanços para dirty flags/eventos se o perfil apontar gargalo e adicionar orçamento de desempenho em teste.
 
-### TD-009 — Configuração não é gravada atomicamente e o fallback de reload é enganoso
+### TD-009 — Configuração atômica e fallback de reload (resolvido)
 
-- **Prioridade/severidade:** P2 / média.
-- **Evidência:** em `OIMRConfig.java:77-123`, uma falha de leitura apenas registra “using defaults”, mas não chama `applyDefaults`; num reload, os valores anteriores permanecem. Em `OIMRConfig.java:210-245`, `Files.newOutputStream(path)` sobrescreve diretamente o arquivo, sem temporário + movimento atômico ou backup.
-- **Impacto:** o operador pode acreditar que defaults foram aplicados quando não foram; queda durante escrita pode deixar arquivo parcial e comportamento imprevisível.
-- **Esforço:** P/M.
-- **Dependências:** definir política para valores inválidos/desconhecidos e compatibilidade de futuras chaves.
-- **Recomendação:** carregar em estrutura temporária, validar tudo, aplicar de uma vez; em erro, aplicar defaults ou manter estado com mensagem verdadeira. Gravar em arquivo temporário, `fsync` quando aplicável e mover atomicamente, preservando backup.
+- **Prioridade/severidade:** P2 / média (resolvido).
+- **Estado em 26/11/2026:** `OIMRConfig` valida todas as propriedades em `ConfigSnapshot` antes de aplicar em memória, diferencia falha na carga inicial (`FAILED_USING_DEFAULTS` aplicando defaults reais) de falha em reload (`FAILED_KEPT_PREVIOUS` mantendo a configuração ativa sem disparar transição de slots), grava em arquivo temporário com `FileChannel.force(true)`, preserva `.bak` e usa `ATOMIC_MOVE` com fallback seguro. Coberto por `OIMRConfigTest` e `PersistenceAndConfigGameTests`.
+- **Residual menor (`P3`):** não há restauração automática a partir do `.bak` quando o arquivo principal falha no carregamento inicial.
 
 ### TD-010 — Superfície Mixin grande e compatibilidade não medida
 
@@ -110,14 +101,11 @@ Mesmo assim, o checkout não está pronto para loja. O Epic 4 passou a excluir d
 - **Dependências:** lista de mods-alvo e versões suportadas; ambiente automatizado de smoke test.
 - **Recomendação:** documentar suporte estrito a 26.3, criar matriz mínima de compatibilidade e preferir APIs/eventos estáveis quando existirem. Para conflitos conhecidos, falhar com diagnóstico claro.
 
-### TD-011 — Núcleo monolítico dificulta revisão e isolamento de regressões
+### TD-011 — Decomposição SOLID parcialmente concluída
 
 - **Prioridade/severidade:** P2 / média.
-- **Evidência:** `HiveMindManager.java` possui 3.811 linhas e concentra ciclo de vida, inventário, efeitos, dano, morte, teleporte, áudio, progressão, rede e caches globais. `HiveMind.java` possui 938 linhas; a suíte GameTest possui 3.282 linhas em uma única classe.
-- **Impacto:** alto acoplamento, revisão difícil, risco de flags globais interferirem entre recursos e testes mais caros de manter.
-- **Esforço:** G.
-- **Dependências:** testes de caracterização e limites claros entre domínios.
-- **Recomendação:** extrair serviços por domínio (inventário, vitais, progressão, morte, teleporte/áudio), encapsular estado por servidor e dividir testes por recurso sem alterar o formato de save de uma vez.
+- **Estado em 26/11/2026:** `HiveMindManager.java` foi reduzida a fachada estática delegando para `HiveMindCoordinator` (por `MinecraftServer`) e 8 serviços de domínio em `hivemind/service/`; a suíte GameTest foi dividida em 6 suítes por domínio + `HiveMindTestSupport` + `OIMRClientGameTests`; `HiveMindContext` foi segmentado em sub-interfaces ISP por domínio (`InventoryAmmo`, `EffectSync`, `VitalsDamage`, etc.).
+- **Residual:** `HiveMind.java` (1.102 linhas) ainda concentra codecs e regras de estado/remainders, e `OIMRConfig.java` (1.120 linhas) ainda mantém campos estáticos globais mutáveis entre instâncias/testes na mesma JVM.
 
 ### TD-012 — Build depende de snapshot e não possui travas/verificação de dependências
 
