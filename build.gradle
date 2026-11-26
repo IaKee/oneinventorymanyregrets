@@ -18,7 +18,7 @@ fabricApi {
 		createSourceSet = true
 		modId = "oneinventorymanyregrets-test"
 		enableGameTests = true
-		enableClientGameTests = false
+		enableClientGameTests = true
 		eula = true
 	}
 }
@@ -36,6 +36,15 @@ test {
 
 processResources {
 	inputs.property "version", project.version
+
+	// Only the two reviewed languages are release artifacts. The remaining
+	// source files are retained as explicitly experimental translation drafts.
+	exclude { details ->
+		if (!details.path.startsWith("assets/oneinventorymanyregrets/lang/")) {
+			return false
+		}
+		return details.name != "en_us.json" && details.name != "pt_br.json"
+	}
 
 	filesMatching("fabric.mod.json") {
 		expand "version": inputs.properties.version
@@ -61,6 +70,10 @@ jar {
 	inputs.property "archivesName", project.base.archivesName
 
 	from("LICENSE") {
+		rename { "${it}_${inputs.properties.archivesName}"}
+	}
+
+	from("THIRD_PARTY_NOTICES.md") {
 		rename { "${it}_${inputs.properties.archivesName}"}
 	}
 }

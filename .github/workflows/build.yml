@@ -21,6 +21,8 @@ jobs:
           distribution: 'microsoft'
       - name: make gradle wrapper executable
         run: chmod +x ./gradlew
+      - name: validate translations
+        run: node scripts/validate-translations.mjs
       - name: build
         run: ./gradlew build
       - name: capture build artifacts
@@ -28,3 +30,23 @@ jobs:
         with:
           name: Artifacts
           path: build/libs/
+
+  client-gametest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+      - name: validate gradle wrapper
+        uses: gradle/actions/wrapper-validation@v4
+      - name: setup jdk
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'microsoft'
+      - name: make gradle wrapper executable
+        run: chmod +x ./gradlew
+      - name: run client game tests
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: xvfb-run --auto-servernum ./gradlew runClientGameTest

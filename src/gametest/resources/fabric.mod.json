@@ -12,6 +12,9 @@
       "net.iakee.oneinventorymanyregrets.ProgressionAndSocialGameTests",
       "net.iakee.oneinventorymanyregrets.TeleportAndAudioGameTests",
       "net.iakee.oneinventorymanyregrets.PersistenceAndConfigGameTests"
+    ],
+    "fabric-client-gametest": [
+      "net.iakee.oneinventorymanyregrets.OIMRClientGameTests"
     ]
   },
   "depends": {

@@ -1,6 +1,6 @@
 # One Inventory, Many Regrets
 
-> **Estado: pré-publicação.** O mod compila e os 47 GameTests atuais passam, mas ainda existem bloqueios documentados antes de uma publicação responsável em loja. Em especial: sincronizações de slot desativadas podem duplicar itens, os testes automatizados não cobrem o cliente e as traduções novas precisam de revisão de origem e qualidade. Consulte [TECHNICAL_DEBT.md](TECHNICAL_DEBT.md).
+> **Estado: pré-publicação.** O projeto possui testes unitários, GameTests de servidor, um Client GameTest de fumaça e validação automática de idiomas. Uma publicação responsável ainda depende da matriz manual de cliente/multiplayer e da confirmação de autoria/licença dos assets gráficos. Consulte [TECHNICAL_DEBT.md](TECHNICAL_DEBT.md) e [docs/MANUAL_TEST_CHECKLIST.md](docs/MANUAL_TEST_CHECKLIST.md).
 
 One Inventory, Many Regrets é um mod Fabric para Minecraft que transforma jogadores do mesmo grupo em uma mente coletiva. Por padrão, jogadores sem equipe pertencem ao grupo `default`; equipes do placar (`/team`) criam grupos separados. Inventário e vários estados de progressão são compartilhados, enquanto afinidade e opções de servidor controlam quanto dos efeitos, dano e recursos circula pelo grupo.
 
@@ -151,7 +151,16 @@ export JAVA_HOME=/caminho/para/jdk-25
 ./gradlew build
 ```
 
-O task `build` executa o GameTest configurado. Resultado desta auditoria em 25/11/2026: build bem-sucedido e **47/47 GameTests obrigatórios aprovados**. Não há testes unitários tradicionais (`test` informa `NO-SOURCE`) e os Client GameTests estão desativados.
+O task `build` executa os testes unitários e os GameTests de servidor configurados. O Client GameTest possui task própria porque abre o cliente gráfico:
+
+```text
+node scripts/validate-translations.mjs
+./gradlew test
+./gradlew runGameTest
+./gradlew runClientGameTest
+```
+
+No Linux, o CI executa o último comando com `xvfb-run` e renderização por software. O teste de cliente abre `OIMRSettingsScreen` em 640×360, verifica título narrável e limites dos widgets. Ele é uma barreira de fumaça, não substitui o roteiro manual de tela, TAB, áudio e multiplayer em [docs/MANUAL_TEST_CHECKLIST.md](docs/MANUAL_TEST_CHECKLIST.md).
 
 Artefatos esperados:
 
@@ -180,14 +189,14 @@ Restaure um backup se necessário e reative todas as opções `sync*`. Esse risc
 
 ### Texto em inglês em outro idioma
 
-O fallback para inglês é esperado quando uma chave não existe. As traduções novas ainda aguardam revisão; duas chaves de `randomDeathLoot` estão ausentes em 143 idiomas neste checkout.
+Releases incluem somente `en_us` e `pt_br`, os dois idiomas oficialmente suportados. Os outros 143 JSONs são rascunhos experimentais gerados por IA, sem revisão humana garantida, e não são empacotados. A política, a fila de 45 chaves ausentes e o processo de contribuição estão em [TRANSLATIONS.md](TRANSLATIONS.md).
 
 ## Limitações conhecidas
 
-- desativar sincronização de slots pode duplicar itens;
-- o cliente, a tela de opções, o TAB e o áudio não possuem testes automatizados ativos;
+- a cobertura automatizada de cliente é somente um teste de fumaça da tela de opções; TAB, áudio e variações visuais ainda exigem validação manual;
 - clientes vanilla e combinações com outros mods ainda não foram validados;
-- 143 arquivos de idioma novos precisam de procedência documentada e duas chaves novas;
+- os 143 rascunhos de idioma gerados por IA não são distribuídos e ainda precisam de revisão/procedência para futura promoção;
+- a autoria/origem dos PNGs está inventariada, mas aguarda declaração explícita do titular;
 - hives e inventários pessoais persistidos não são expurgados automaticamente;
 - a homepage declarada nos metadados (`iakee.online`) não resolveu em DNS durante esta auditoria;
 - não há screenshots finais, changelog, notas de versão nem automação de publicação;
@@ -196,8 +205,8 @@ O fallback para inglês é esperado quando uma chave não existe. As traduções
 ## Roadmap resumido
 
 1. Eliminar a duplicação de itens ou remover da versão pública as combinações inseguras de sincronização.
-2. Validar procedência, placeholders e cobertura das traduções.
-3. Ativar testes de cliente e executar multiplayer real, cliente sem mod e matriz de mods populares.
+2. Obter revisão humana antes de promover qualquer idioma experimental.
+3. Expandir testes de cliente e executar multiplayer real, cliente sem mod e matriz de mods populares.
 4. Medir desempenho com grupos maiores e implementar limpeza de hives/estados órfãos.
 5. Produzir screenshots, ícone final, changelog e pipeline de release reproduzível.
 
@@ -210,8 +219,8 @@ Antes de enviar uma alteração:
 1. abra uma issue ou descreva claramente o problema e o cenário;
 2. mantenha mudanças focadas e preserve compatibilidade de saves;
 3. execute `./gradlew build` com Java 25;
-4. inclua GameTests para comportamento de servidor e, quando a infraestrutura existir, testes de cliente;
-5. atualize documentação e traduções afetadas.
+4. inclua GameTests para comportamento de servidor e Client GameTests para fluxos visuais automatizáveis;
+5. atualize documentação e traduções afetadas e rode `node scripts/validate-translations.mjs`.
 
 Código-fonte: <https://github.com/iakee/oneinventorymanyregrets>
 
@@ -219,25 +228,26 @@ Código-fonte: <https://github.com/iakee/oneinventorymanyregrets>
 
 - autoria do mod e histórico do repositório: Giordano Souza (`iakee`);
 - Fabric Loader, Fabric API, Fabric Loom, Gradle e Minecraft pertencem aos respectivos projetos e titulares;
-- traduções e recursos adicionais só devem ser creditados após a procedência ser confirmada.
+- traduções e recursos adicionais só devem ser creditados após a procedência ser confirmada; consulte [TRANSLATIONS.md](TRANSLATIONS.md) e [ASSET_PROVENANCE.md](ASSET_PROVENANCE.md).
 
 ## Licença
 
 O código e o conteúdo original de titularidade do projeto estão disponíveis sob a [MIT License](LICENSE), copyright 2025–2026 Giordano Souza (`iakee`). O manifesto Fabric foi alinhado para `MIT`.
 
-Essa declaração não relicencia componentes de terceiros. Os scripts e o wrapper Gradle mantêm os avisos Apache-2.0 presentes nos próprios arquivos. As 143 traduções novas sem procedência documentada **não devem ser tratadas como liberadas sob MIT nem incluídas em publicação** até revisão do titular/origem.
+Essa declaração não relicencia componentes de terceiros. Os scripts e o wrapper Gradle mantêm os avisos Apache-2.0 presentes nos próprios arquivos. As 143 traduções experimentais sem procedência documentada não são tratadas como MIT nem incluídas no JAR. O inventário de exceções está em [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), também incluído no artefato.
 
 ## Checklist de publicação
 
 - [x] Build reproduzido localmente com Java 25.
-- [x] 47 GameTests obrigatórios aprovados.
+- [x] 60 GameTests obrigatórios e 15 testes JUnit aprovados.
 - [x] README de pré-publicação criado.
 - [x] `LICENSE` e `fabric.mod.json` alinhados para MIT no conteúdo próprio.
 - [x] URL do código-fonte verificada.
-- [ ] Resolver ou retirar as opções que permitem duplicação de itens.
-- [ ] Confirmar direitos, créditos e qualidade de todas as traduções e imagens.
-- [ ] Completar as duas chaves ausentes nos 143 idiomas novos.
-- [ ] Adicionar e executar testes de cliente/multiplayer real.
+- [x] Publicar apenas `en_us` e `pt_br`; validar JSON, cobertura e placeholders no CI.
+- [x] Registrar escopo da MIT e avisos de terceiros.
+- [x] Adicionar testes unitários e Client GameTest em CI/Xvfb.
+- [ ] Confirmar direitos e origem dos PNGs inventariados.
+- [ ] Executar e registrar o roteiro manual de cliente/multiplayer real.
 - [ ] Validar cliente sem mod e uma matriz de compatibilidade.
 - [ ] Corrigir ou remover a homepage sem DNS.
 - [ ] Criar screenshots e decidir o ícone final.

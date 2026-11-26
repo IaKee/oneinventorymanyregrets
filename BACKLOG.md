@@ -188,15 +188,15 @@
 
 ### `BL-011` — Documentação de suporte de idiomas, aviso de tradução por IA e cobertura de chaves
 - **Prioridade:** P0 | **Esforço:** M | **Relação:** `TD-002`
-- **Contexto:** Apenas **Português Brasileiro (`pt_br.json`)** e **Inglês (`en_us.json`)** possuem revisão/suporte oficial (151 chaves cada). Os demais **143 arquivos** de idioma no checkout não têm revisão humana oficial, foram traduzidos por IA/sem procedência documentada e possuem apenas 149 chaves (faltam `oimr.settings.random_death_loot` e `oimr.settings.random_death_loot.tooltip`).
+- **Contexto atualizado:** apenas **Português Brasileiro (`pt_br.json`)** e **Inglês (`en_us.json`)** possuem revisão/suporte oficial (194 chaves cada). Os demais **143 arquivos** foram gerados por IA, não têm revisão humana/procedência confirmada, possuem 149 chaves e ficam fora do JAR; as 45 ausências estão catalogadas em `TRANSLATIONS.md`.
 - **Subtarefas:**
-  - [ ] Deixar explícito na documentação (`README.md` e eventual guia de tradução) que apenas `en_us` e `pt_br` são oficialmente suportados e que demais idiomas (caso incluídos) foram gerados por IA e não têm revisão garantida.
-  - [ ] Documentar formalmente as chaves que ainda precisam de tradução/tratamento:
+  - [x] Deixar explícito na documentação (`README.md` e `TRANSLATIONS.md`) que apenas `en_us` e `pt_br` são oficialmente suportados e que os demais idiomas foram gerados por IA e não têm revisão garantida.
+  - [x] Documentar formalmente as chaves que ainda precisam de tradução/tratamento:
     - `oimr.settings.random_death_loot`
     - `oimr.settings.random_death_loot.tooltip`
     - *(+ quaisquer novas chaves introduzidas pelas settings de `BL-004` a `BL-007`)*
-  - [ ] Decidir entre: (a) manter apenas `en_us` e `pt_br` empacotados na primeira release pública e mover traduções experimentais para revisão/contribuição, ou (b) completar, validar e rotular claramente a origem das traduções geradas por IA.
-  - [ ] Criar script/checagem no CI que valide JSON válido, conjunto completo de chaves em relação a `en_us.json` e integridade dos placeholders (`%s`, `%1$s`, etc.).
+  - [x] Decidir entre: (a) manter apenas `en_us` e `pt_br` empacotados na primeira release pública e manter traduções experimentais fora do artefato para revisão/contribuição, ou (b) completar, validar e rotular claramente a origem das traduções geradas por IA. **Decisão: (a), aplicada em `processResources`.**
+  - [x] Criar script/checagem no CI que valide JSON válido, conjunto completo de chaves em relação a `en_us.json` e integridade dos placeholders (`%s`, `%1$s`, etc.).
 
 ---
 
@@ -210,19 +210,19 @@
     2. Os **143 arquivos de idioma novos** não têm procedência/autoria registrada no repositório.
     3. Os **PNGs** (`icon.png` e sprites de HUD/TAB) precisam ter confirmação de autoria própria (ou licença se houver base de terceiros).
 - **Subtarefas:**
-  - [ ] Confirmar e registrar a autoria dos assets gráficos (`icon.png`, sprites de `hud/` e `tab/`).
-  - [ ] Criar um `THIRD_PARTY_NOTICES.md` (ou seção equivalente clara no `LICENSE`/`README`) listando exatamente o que é de terceiros e sob qual licença está (ex.: Gradle Wrapper sob Apache-2.0), deixando explícito que a MIT cobre apenas o conteúdo original do projeto.
-  - [ ] Alinhar a decisão das traduções (`BL-011`) com o licenciamento para não distribuir arquivos sem procedência clara em releases públicas.
+  - [ ] Confirmar e registrar a autoria dos assets gráficos (`icon.png`, sprites de `hud/` e `tab/`). **Inventário e commits registrados em `ASSET_PROVENANCE.md`; falta declaração explícita do titular, que não pode ser inferida do Git.**
+  - [x] Criar um `THIRD_PARTY_NOTICES.md` listando exatamente o que é de terceiros e sob qual licença está (ex.: Gradle Wrapper sob Apache-2.0), deixando explícito que a MIT cobre apenas o conteúdo original do projeto.
+  - [x] Alinhar a decisão das traduções (`BL-011`) com o licenciamento para não distribuir arquivos sem procedência clara em releases públicas.
 
 ---
 
 ### `BL-013` — Testes automatizados e validação manual de Cliente, Interface e Áudio
 - **Prioridade:** P1 | **Esforço:** M/G | **Relação:** `TD-004` (`build.gradle:21`)
-- **Contexto:** Atualmente `enableClientGameTests = false` em `build.gradle`, a task `test` retorna `NO-SOURCE`, e os 8 Mixins de cliente (HUD/TAB, tela de configurações, filtro de áudio subaquático, fog, renderização) não passam por testes automatizados.
+- **Contexto atualizado:** o projeto possui 15 Mixins de cliente (HUD/TAB, tela de configurações, áudio, fog e renderização). O Epic 4 habilitou Client GameTests e JUnit; a automação atual é uma barreira de fumaça, enquanto áudio, TAB, acessibilidade e multiplayer real permanecem na matriz manual.
 - **Subtarefas:**
-  - [ ] Investigar viabilidade de habilitar `enableClientGameTests = true` no Gradle/CI (incluindo headless/Xvfb no Linux do GitHub Actions).
-  - [ ] Adicionar testes unitários JUnit (`src/test`) para lógicas puras desacopladas do cliente/servidor (cálculos de afinidade, escalas, parsing/validação de config, regras de formatação).
-  - [ ] Criar um checklist/roteiro de testes manuais versionado cobrindo:
+  - [x] Investigar viabilidade de habilitar `enableClientGameTests = true` no Gradle/CI (incluindo headless/Xvfb no Linux do GitHub Actions). **Habilitado com `runClientGameTest`, resolução 640×360 e job dedicado em Xvfb.**
+  - [x] Adicionar testes unitários JUnit (`src/test`) para lógicas puras desacopladas do cliente/servidor (config, política de limpeza e estado/cálculo de afinidade do cliente).
+  - [x] Criar um checklist/roteiro de testes manuais versionado (`docs/MANUAL_TEST_CHECKLIST.md`) cobrindo:
     - Tela `OIMRSettingsScreen` (singleplayer vs. multiplayer bloqueado/somente leitura, resoluções menores, teclado/narrador).
     - Overlay de HUD e painel TAB com indicadores de vínculo.
     - Áudio subaquático (`underwaterMuffle`) e sons de mobs (`sharedMobSounds` com direção e distância).

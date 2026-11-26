@@ -12,9 +12,9 @@ Auditoria executada em **25/11/2026** sobre o checkout local de `OneInventoryMan
 
 ## Resumo executivo
 
-O estado atual **compila e passa todos os 47 GameTests obrigatórios** quando o Gradle roda em Java 25. A primeira tentativa com Java 21 falhou ainda na configuração do Loom, e a repetição com Eclipse Temurin 25 foi bem-sucedida. Não foram encontrados segredos óbvios, `TODO`, `FIXME`, `HACK`, stubs ou stack traces de depuração nos fontes auditados.
+O estado atual **compila e passa 60 GameTests obrigatórios, 15 testes JUnit e um Client GameTest** quando o Gradle roda em Java 25. A primeira tentativa histórica com Java 21 falhou ainda na configuração do Loom. Não foram encontrados segredos óbvios, `TODO`, `FIXME`, `HACK`, stubs ou stack traces de depuração nos fontes auditados.
 
-Mesmo assim, o checkout não está pronto para loja. O bloqueio mais grave é um comportamento de duplicação de itens explicitamente reconhecido quando a sincronização de slots é desligada. Também há 143 traduções novas sem procedência registrada e incompletas, ausência de teste de cliente, link de homepage quebrado, materiais de loja ausentes e riscos de compatibilidade/desempenho que ainda não foram medidos.
+Mesmo assim, o checkout não está pronto para loja. O Epic 4 passou a excluir do JAR os 143 rascunhos de tradução sem procedência, adicionou validação de idiomas, testes unitários, um Client GameTest em Xvfb e roteiro manual. Ainda faltam a declaração de autoria/origem dos PNGs, a execução da matriz manual, o link de homepage, materiais de loja e medições de compatibilidade/desempenho.
 
 ## Fatos confirmados — obrigatórios antes da publicação
 
@@ -27,32 +27,32 @@ Mesmo assim, o checkout não está pronto para loja. O bloqueio mais grave é um
 - **Dependências:** definir semântica de migração entre inventário compartilhado e pessoal; cobrir entrada, saída, troca de equipe, morte, respawn, contêiner aberto e jogadores offline.
 - **Recomendação:** impedir combinações inseguras na versão pública ou implementar transferência transacional sem clonagem. Criar GameTests de propriedade/conservação de itens e testar upgrades de saves. Até lá, manter todas as opções `sync*` ativadas e exibir o aviso na página da loja.
 
-### TD-002 — Traduções novas sem procedência e com cobertura incompleta
+### TD-002 — Traduções experimentais sem procedência e com cobertura incompleta (mitigado para releases)
 
 - **Prioridade/severidade:** P0 / alta jurídica e de publicação.
-- **Evidência:** `git status --short` lista 143 JSONs de idioma não rastreados, além de alterações em `en_us.json` e `pt_br.json`. Todos os 145 JSONs analisados são sintaticamente válidos; `en_us` tem 151 chaves, enquanto os outros 143 idiomas têm 149 e não contêm `oimr.settings.random_death_loot` nem `oimr.settings.random_death_loot.tooltip`. A quantidade de argumentos `%s`/`%n$s` das chaves presentes é consistente em todos os idiomas, permitindo reordenação posicional legítima. Não existe script, cabeçalho, crédito ou documento indicando tradutor, fonte ou licença.
+- **Evidência atual:** os 145 JSONs são válidos; `en_us` e `pt_br` têm as 194 chaves de referência, enquanto os 143 rascunhos têm 149 e faltam 45 chaves catalogadas em `TRANSLATIONS.md`. A validação automatizada confirma placeholders compatíveis e o build exclui os rascunhos do JAR.
 - **Impacto:** mensagens caem para inglês; qualidade e contexto não foram revisados; copiar/adaptar traduções de terceiros sem licença compatível pode impedir distribuição sob MIT.
 - **Esforço:** G para revisão humana ampla; M para criar validação automatizada e limitar idiomas publicados.
 - **Dependências:** decisão do titular sobre a origem; eventual autorização/licença dos tradutores; falantes/revisores por idioma.
-- **Recomendação:** não empacotar os 143 arquivos na release até documentar a procedência. Preferir publicar somente idiomas revisados. Adicionar CI que valide JSON, conjunto de chaves e placeholders posicionais por multiconjunto (a ordem pode variar legitimamente entre idiomas).
+- **Estado em 26/11/2026:** releases empacotam somente `en_us` e `pt_br`; os 143 rascunhos de IA permanecem fora do JAR. `scripts/validate-translations.mjs` valida JSON, valores, cobertura dos idiomas suportados e placeholders de todos os textos presentes no CI. A promoção futura continua bloqueada por revisão humana e procedência, conforme `TRANSLATIONS.md`.
 
-### TD-003 — Conteúdo próprio mudou de CC0 para MIT, mas terceiros precisam de escopo explícito
+### TD-003 — Conteúdo próprio mudou de CC0 para MIT, mas assets precisam de confirmação (parcialmente resolvido)
 
 - **Prioridade/severidade:** P0 / alta para licenciamento.
 - **Evidência:** antes da auditoria, `LICENSE` continha CC0-1.0 e `fabric.mod.json:14` declarava `CC0-1.0`. O histórico registra Giordano Souza/IaKee com o mesmo e-mail e commits entre 2025 e 2026. O wrapper Gradle contém cabeçalhos Apache-2.0; as traduções novas não têm procedência.
 - **Impacto:** uma declaração genérica de MIT pode ser interpretada como relicenciamento de conteúdo que o projeto talvez não controle.
 - **Esforço:** P para o código próprio; M/G para inventário de terceiros.
 - **Dependências:** confirmação de titularidade dos PNGs e traduções; decisão sobre eventual `THIRD_PARTY_NOTICES`.
-- **Recomendação:** a auditoria atualizou `LICENSE` e o manifesto para MIT apenas para conteúdo próprio comprovado e registrou as exceções no README. Antes da release, documentar origem/licença de cada recurso não autoral e preservar avisos de terceiros. Não incluir conteúdo de procedência incerta.
+- **Estado em 26/11/2026:** `THIRD_PARTY_NOTICES.md` delimita a MIT, preserva o Gradle Wrapper/Apache-2.0 e exclui traduções experimentais do artefato. `ASSET_PROVENANCE.md` registra grupos e commits dos PNGs, mas a declaração do titular ainda é necessária porque autoria não pode ser inferida apenas do Git.
 
-### TD-004 — Cliente, interface e áudio não são testados automaticamente
+### TD-004 — Cobertura automatizada de cliente ainda é parcial
 
 - **Prioridade/severidade:** P1 / alta.
-- **Evidência:** `build.gradle:21` define `enableClientGameTests = false`. O manifesto de Mixins registra oito Mixins de cliente, incluindo TAB, opções, áudio e fog; o task `test` retorna `NO-SOURCE`. Os 47 testes aprovados rodam no servidor GameTest.
+- **Evidência atual:** `enableClientGameTests = true`; o CI executa `runClientGameTest` em Xvfb e há testes JUnit em `src/test`. O teste de cliente cobre abertura da tela em 640×360, título e limites diretos de widgets. TAB, áudio, narrador, multiplayer e compatibilidade vanilla continuam no roteiro manual.
 - **Impacto:** regressões visuais, narrador/teclado, resoluções menores, payloads, desconexão e áudio podem chegar à loja apesar do build verde.
 - **Esforço:** M/G.
 - **Dependências:** infraestrutura de Client GameTest ou testes manuais reproduzíveis; capturas de referência.
-- **Recomendação:** habilitar Client GameTests onde possível e criar um roteiro manual versionado para menu, TAB, telas, áudio subaquático, cliente modded, cliente sem mod, reconnect e servidor dedicado.
+- **Estado em 26/11/2026:** infraestrutura e roteiro `docs/MANUAL_TEST_CHECKLIST.md` adicionados. Próximo passo: ampliar automação de TAB/áudio e executar a matriz real antes da release.
 
 ### TD-005 — Não há pacote de loja nem processo de release
 
@@ -86,7 +86,7 @@ Mesmo assim, o checkout não está pronto para loja. O bloqueio mais grave é um
 ### TD-008 — Sincronização por tick tem custo amplo e ainda não foi perfilada
 
 - **Prioridade/severidade:** P2 / média, potencialmente alta em servidores grandes.
-- **Evidência:** `HiveMindManager.java:945-1005` sincroniza equipes, percorre hives/membros e chama `broadcastChanges`, detecção de equipamento e `flushDirty` de avanços a cada tick. `getOnlineMembers` percorre toda a lista de jogadores (`HiveMindManager.java:306-313`) e é chamado repetidamente. Durante GameTest o servidor registrou `Can't keep up! ... 4569ms or 91 ticks behind` ao executar 47 testes simultâneos.
+- **Evidência:** `HiveMindManager.java:945-1005` sincroniza equipes, percorre hives/membros e chama `broadcastChanges`, detecção de equipamento e `flushDirty` de avanços a cada tick. `getOnlineMembers` percorre toda a lista de jogadores (`HiveMindManager.java:306-313`) e é chamado repetidamente. Durante a auditoria original o servidor registrou `Can't keep up! ... 4569ms or 91 ticks behind`; o lote atual executa 60 GameTests.
 - **Impacto:** custo quadrático em alguns padrões de número de hives/jogadores e tráfego de inventário/progressão desnecessário. O aviso de GameTest é um sinal, não prova de lag em gameplay real.
 - **Esforço:** G.
 - **Dependências:** profiler (JFR/spark), cenários de 2/10/50 jogadores, métricas de pacotes e saves reais.
@@ -197,8 +197,8 @@ Estas são ideias, não fatos de defeito:
 - substituído o texto CC0 por MIT para conteúdo próprio comprovado: `Copyright (c) 2025-2026 Giordano Souza (iakee)`;
 - alinhado `fabric.mod.json` de `CC0-1.0` para `MIT`;
 - documentadas as exceções de terceiros e a pendência de procedência das traduções, sem relicenciamento silencioso;
-- executado build completo com Java 25 e 47/47 GameTests aprovados;
-- validada sintaxe dos 145 JSONs de idioma e identificadas as duas chaves ausentes em 143 arquivos;
+- executado build completo com Java 25 e 60/60 GameTests, 15/15 JUnit e Client GameTest aprovados;
+- validada sintaxe dos 145 JSONs; os dois idiomas suportados cobrem 194 chaves e os 143 rascunhos têm 45 ausências catalogadas;
 - verificados os quatro PNGs visualmente; não foi alterado nenhum recurso;
 - verificada ausência de segredos óbvios e marcadores `TODO/FIXME/HACK` na varredura textual.
 
@@ -211,11 +211,14 @@ Resultado inicial: Java 21.0.4
 .\gradlew.bat build --warning-mode all
 Resultado inicial: FAIL — Fabric Loom requer runtime Java 25, mas o Gradle usou Java 21.
 
-JAVA_HOME=<Eclipse Temurin 25.0.5.1> .\gradlew.bat build --warning-mode all
-Resultado final: BUILD SUCCESSFUL; 47/47 required GameTests passed; test NO-SOURCE.
+JAVA_HOME=<Eclipse Temurin 25.0.5.1> .\gradlew.bat build
+Resultado atual: BUILD SUCCESSFUL; 60/60 required GameTests e 15/15 testes JUnit aprovados.
 
-Validação PowerShell de JSON/chaves
-Resultado: 145 arquivos válidos; en_us/pt_br com 151 chaves; 143 arquivos com 149, faltando as duas chaves de randomDeathLoot.
+JAVA_HOME=<Eclipse Temurin 25.0.5.1> .\gradlew.bat runClientGameTest
+Resultado atual: BUILD SUCCESSFUL; tela de configurações validada em 640x360. A primeira execução revelou e levou à correção do alvo obsoleto de `AvatarRendererMixin`.
+
+node scripts/validate-translations.mjs
+Resultado atual: 145 arquivos válidos; en_us/pt_br com 194 chaves; 143 rascunhos com 149 e 45 chaves pendentes.
 
 HEAD https://github.com/iakee/oneinventorymanyregrets
 Resultado: HTTP 200.
